@@ -9,6 +9,9 @@ pub fn main() !void {
     );
 }
 
-pub fn serve(response: http.Response, request: http.Request) void {
-    std.debug.warn("Request path: {}\n", .{request.url.path});
+pub fn serve(response: *http.Response, request: http.Request) void {
+    std.debug.warn("path: {}\n", .{request.url.path});
+    response.write("Hello world, from Zig!") catch {
+        std.debug.warn("Couldn't write to stream", .{});
+    };
 }

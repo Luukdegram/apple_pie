@@ -76,10 +76,11 @@ pub fn parse(
                 state = .Header;
             },
             .Header => {
-                std.debug.warn("Header: {}\n", .{bytes});
                 // read until all headers are parsed, if false is returned, assume body has started
-                // and set the current state to .Body
-                if (!try parseHeader(&request.headers, bytes)) {
+                // and set the current state to .Body (only if content-length is defined)
+                var header_buffer = try allocator.alloc(u8, bytes.len);
+                std.mem.copy(u8, header_buffer, bytes);
+                if (!try parseHeader(&request.headers, header_buffer)) {
                     if (request.headers.contains("Content-Length")) {
                         state = .Body;
                     } else {
@@ -88,12 +89,12 @@ pub fn parse(
                 }
             },
             .Body => {
-                if (request.headers.getValue("Content-Length")) |val| {
-                    std.debug.warn("VALUE: {}\n", .{val});
-                    //const length = try std.fmt.parseInt(usize, val, 10);
-                    var body = try allocator.alloc(u8, 101);
-                    _ = try stream.readAll(body);
+                if (request.headers.getValue("Content-Length")) |value| {
+                    const length = try std.fmt.parseInt(usize, value, 10);
+                    var body = try allocator.alloc(u8, length);
+                    _ = try stream.read(body);
                     request.body = body;
+                    break;
                 }
             },
         }
@@ -110,7 +111,9 @@ fn parseHeader(headers: *Headers, bytes: []u8) !bool {
 
     const key = parts.next() orelse unreachable;
     const value = parts.next() orelse unreachable;
-    try headers.putNoClobber(key, value);
+
+    // overwrite duplicate keys, remove carriage return from value
+    _ = try headers.put(key, value[0 .. value.len - 1]);
     return true;
 }
 
