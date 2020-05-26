@@ -3,12 +3,12 @@ const Builder = @import("std").build.Builder;
 pub fn build(b: *Builder) void {
     // builds the library as a static library
     const mode = b.standardReleaseOptions();
-    const lib = b.addStaticLibrary("apple_pie", "src/main.zig");
+    const lib = b.addStaticLibrary("apple_pie", "src/server.zig");
     lib.setBuildMode(mode);
     lib.install();
 
     // builds and runs the tests
-    var main_tests = b.addTest("src/main.zig");
+    var main_tests = b.addTest("src/server.zig");
     main_tests.setBuildMode(mode);
 
     const test_step = b.step("test", "Run library tests");
@@ -16,7 +16,7 @@ pub fn build(b: *Builder) void {
 
     // Allows for running the example
     var example = b.addExecutable("example", "example/example.zig");
-    example.addPackagePath("apple_pie", "src/main.zig");
+    example.addPackagePath("apple_pie", "src/server.zig");
     example.setBuildMode(mode);
     example.install();
 

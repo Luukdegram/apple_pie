@@ -39,7 +39,23 @@ pub const Url = struct {
     }
 
     /// Builds query parameters from url's `raw_query`
-    pub fn Query(self: @This()) void {}
+    /// Memory is owned by caller
+    pub fn queryParameters(self: @This(), allocator: *Allocator) std.StringHashMap([]const u8) {
+        var query = self.raw_query;
+        while (query.len > 0) {
+            var key = query;
+            if (std.mem.indexOfAny(u8, key, "&")) |index| {
+                query = key[index..];
+                key = key[0..index];
+            }
+            if (key.len == 0) continue;
+            var value: []u8 = undefined;
+            if (std.mem.indexOfAny(u8, key, "=")) |index| {
+                value = key[index..];
+                key = key[0..index];
+            }
+        }
+    }
 };
 
 test "Basic raw query" {

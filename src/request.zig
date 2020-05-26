@@ -11,10 +11,17 @@ pub const Request = struct {
     protocol: []const u8,
 
     pub fn deinit(self: @This()) void {
+        const allocator = self.allocator;
+
+        //free header memory, perhaps find a better way for perf
+        var it = self.headers.iterator();
+        while (it.next()) |kv| {
+            allocator.free(kv.key);
+            allocator.free(kv.value);
+        }
         self.headers.deinit();
         self.url.deinit();
 
-        const allocator = self.allocator;
         allocator.free(self.body);
         allocator.free(self.method);
         allocator.free(self.protocol);
@@ -78,9 +85,7 @@ pub fn parse(
             .Header => {
                 // read until all headers are parsed, if false is returned, assume body has started
                 // and set the current state to .Body (only if content-length is defined)
-                var header_buffer = try allocator.alloc(u8, bytes.len);
-                std.mem.copy(u8, header_buffer, bytes);
-                if (!try parseHeader(&request.headers, header_buffer)) {
+                if (!try parseHeader(&request.headers, allocator, bytes)) {
                     if (request.headers.contains("Content-Length")) {
                         state = .Body;
                     } else {
@@ -103,17 +108,27 @@ pub fn parse(
 }
 
 /// Attempts to parse a line into a header, returns `null` if no header is found
-fn parseHeader(headers: *Headers, bytes: []u8) !bool {
+/// Each KV needs to be freed manually
+fn parseHeader(headers: *Headers, allocator: *std.mem.Allocator, bytes: []u8) !bool {
     if (bytes.len == 0 or bytes[0] == 13) return false;
 
+    // remove last byte for carrot return
+    const header_string = bytes[0 .. bytes.len - 1];
+
     // each header is defined by "name: value"
-    var parts = std.mem.split(bytes, ": ");
+    var parts = std.mem.split(header_string, ": ");
 
     const key = parts.next() orelse unreachable;
     const value = parts.next() orelse unreachable;
 
+    var key_buffer = try allocator.alloc(u8, key.len);
+    var value_buffer = try allocator.alloc(u8, value.len);
+
+    std.mem.copy(u8, key_buffer, key);
+    std.mem.copy(u8, value_buffer, value);
+
     // overwrite duplicate keys, remove carriage return from value
-    _ = try headers.put(key, value[0 .. value.len - 1]);
+    _ = try headers.put(key_buffer, value_buffer);
     return true;
 }
 
