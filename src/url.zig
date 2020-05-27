@@ -50,13 +50,16 @@ pub const Url = struct {
         while (query.len > 0) {
             var key = query;
             if (std.mem.indexOfAny(u8, key, "&")) |index| {
-                query = key[index..];
+                query = key[index + 1 ..];
                 key = key[0..index];
+            } else {
+                query = "";
             }
+
             if (key.len == 0) continue;
-            var value: []u8 = undefined;
+            var value: []const u8 = undefined;
             if (std.mem.indexOfAny(u8, key, "=")) |index| {
-                value = key[index..];
+                value = key[index + 1 ..];
                 key = key[0..index];
             }
 
@@ -65,6 +68,8 @@ pub const Url = struct {
 
             _ = try queries.put(key, value);
         }
+
+        return queries;
     }
 };
 
@@ -80,7 +85,7 @@ fn unescape(allocator: *Allocator, value: []const u8) ![]const u8 {
         switch (value[i]) {
             '%' => {
                 perc_counter += 1;
-                if (i + 2 > value.len or !isHex(value[i + 1]) or !isHex(s[i + 2])) {
+                if (i + 2 > value.len or !isHex(value[i + 1]) or !isHex(value[i + 2])) {
                     return error.MalformedUrl;
                 }
                 i += 2;
@@ -88,6 +93,7 @@ fn unescape(allocator: *Allocator, value: []const u8) ![]const u8 {
             '+' => {
                 has_plus = true;
             },
+            else => {},
         }
     }
     if (perc_counter == 0 and !has_plus) return value;
@@ -98,7 +104,9 @@ fn unescape(allocator: *Allocator, value: []const u8) ![]const u8 {
     while (i < buffer.len) : (i += 1) {
         switch (value[i]) {
             '%' => {
-                buffer[i] = std.fmt.charToDigit(value[i + 1], 16) << 4 | std.fmt.charToDigit(value[i + 2], 16);
+                const a = try std.fmt.charToDigit(value[i + 1], 16);
+                const b = try std.fmt.charToDigit(value[i + 2], 16);
+                buffer[i] = a << 4 | b;
                 i += 2;
             },
             '+' => buffer[i] = ' ',
@@ -125,4 +133,15 @@ test "Basic raw query" {
     defer url.deinit();
 
     testing.expectEqualSlices(u8, "name=value", url.raw_query);
+}
+
+test "Retrieve query parameters" {
+    const path = "/example?name=value";
+    const url: Url = try Url.init(testing.allocator, path);
+    defer url.deinit();
+
+    const query_params = try url.queryParameters(testing.allocator);
+    defer query_params.deinit();
+    testing.expect(query_params.contains("name"));
+    testing.expectEqualSlices(u8, "value", query_params.getValue("name") orelse " ");
 }
