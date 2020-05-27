@@ -150,7 +150,7 @@ pub const Response = struct {
             _ = try stream.write(result);
         }
 
-        // Carrot Return after headers to tell clients where headers end and body starts
+        // Carrot Return after headers to tell clients where headers end, and body starts
         _ = try stream.write("\r\n");
 
         _ = try stream.writeAll(contents);
@@ -167,7 +167,7 @@ pub const Response = struct {
 pub fn listenAndServe(
     allocator: *Allocator,
     address: net.Address,
-    comptime handler: var,
+    handler: var,
 ) !void {
     var server = net.StreamServer.init(.{});
     defer server.deinit();
@@ -181,9 +181,14 @@ pub fn listenAndServe(
 }
 
 /// Handles a request and returns a response based on the given handler function
-fn serveRequest(allocator: *Allocator, server: *net.StreamServer, comptime handlerFn: var) !void {
+fn serveRequest(
+    allocator: *Allocator,
+    server: *net.StreamServer,
+    handler: var,
+) !void {
     // if it fails to accept connection, simply return and don't handle it
     var connection: net.StreamServer.Connection = server.accept() catch return;
+    defer connection.file.close();
 
     // use an arena allocator to free all memory at once as it performs better than
     // freeing everything individually.
@@ -192,10 +197,12 @@ fn serveRequest(allocator: *Allocator, server: *net.StreamServer, comptime handl
     if (req.parse(&arena.allocator, connection.file.inStream())) |*parsed_request| {
         var response = Response.init(&connection, &arena.allocator);
 
-        handlerFn.serve(&response, parsed_request.*);
-        connection.file.close();
-    } else |_| {}
-    // for now, don't handle the error
+        handler.serve(&response, parsed_request.*);
+    } else |err| {
+        // for now write to stderr,
+        // should probably implement a reference to a stream the user can set
+        std.debug.warn("Could not parse HTTP Request: {}\n", .{err});
+    }
 }
 
 /// Generic Function to serve, needs to be implemented by the caller
