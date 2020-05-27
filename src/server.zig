@@ -104,29 +104,61 @@ const StatusCode = enum(u16) {
     }
 };
 
+/// Headers is an alias to `std.StringHashMap([]const u8)`
+pub const Headers = req.Headers;
+
 /// Response allows to set the status code and content of the response
-/// connection is currently accessable but should be private?
 pub const Response = struct {
     /// current connection between server and peer
     connection: *net.StreamServer.Connection,
     /// status code of the response, 200 by default
     status_code: u16 = 200,
+    /// StringHashMap([]const u8) with key and value of headers
+    headers: Headers,
+    allocator: *Allocator,
 
-    /// creates a new Response object with defaults
-    fn init(connection: *net.StreamServer.Connection) Response {
-        return Response{ .connection = connection };
+    /// Creates a new Response object with its connection set
+    fn init(connection: *net.StreamServer.Connection, allocator: *Allocator) Response {
+        return Response{
+            .connection = connection,
+            .allocator = allocator,
+            .headers = Headers.init(allocator),
+        };
     }
 
-    /// Writes bytes to the requester
+    /// Writes HTTP Response to the peer
     pub fn write(self: @This(), contents: []const u8) !void {
         var stream = self.connection.file.outStream();
         // reserve 50 bytes for our status line
         var buffer: [50]u8 = undefined;
         const status_code_string = @intToEnum(StatusCode, self.status_code).string();
-        const status_line = try std.fmt.bufPrint(&buffer, "HTTP/1.1 {} {}\r\n\r\n", .{ self.status_code, status_code_string });
+        const status_line = try std.fmt.bufPrint(&buffer, "HTTP/1.1 {} {}\r\n", .{ self.status_code, status_code_string });
+        // write status line
         _ = try stream.write(status_line);
+        // write headers
+        var it = self.headers.iterator();
+        while (it.next()) |header| {
+            var header_buffer = try self.allocator.alloc(u8, header.key.len + header.value.len + 4); //4 bytes for ": " and \r\n
+            defer self.allocator.free(header_buffer);
+            const result = try std.fmt.bufPrint(header_buffer, "{}: {}\r\n", .{ header.key, header.value });
+            _ = try stream.write(result);
+        }
+
+        if (!self.headers.contains("Content-Length")) {
+            var content_header: [50]u8 = undefined;
+            const result = try std.fmt.bufPrint(&content_header, "Content-Length: {}\r\n", .{contents.len});
+            _ = try stream.write(result);
+        }
+
+        // Carrot Return after headers to tell clients where headers end and body starts
+        _ = try stream.write("\r\n");
 
         _ = try stream.writeAll(contents);
+    }
+
+    /// frees memory of `headers`
+    fn deinit(self: @This()) void {
+        self.headers.deinit();
     }
 };
 
@@ -158,7 +190,7 @@ fn serveRequest(allocator: *Allocator, server: *net.StreamServer, comptime handl
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     if (req.parse(&arena.allocator, connection.file.inStream())) |*parsed_request| {
-        var response = Response.init(&connection);
+        var response = Response.init(&connection, &arena.allocator);
 
         handlerFn.serve(&response, parsed_request.*);
         connection.file.close();
@@ -168,8 +200,11 @@ fn serveRequest(allocator: *Allocator, server: *net.StreamServer, comptime handl
 
 /// Generic Function to serve, needs to be implemented by the caller
 pub fn Handler(
+    comptime Context: type,
     /// Implementee's serve function to handle the request
     comptime serveFn: fn (
+        /// The context responsible of the serve function
+        context: Context,
         /// Response object that can be written to
         response: *Response,
         /// Request object containing the original request with its data such as headers, url etc.
@@ -177,9 +212,11 @@ pub fn Handler(
     ) void,
 ) type {
     return struct {
+        context: Context,
+
         /// calls the implementation function to serve the request
-        pub fn serve(response: *Response, request: Request) void {
-            return serveFn(response, request);
+        pub fn serve(self: @This(), response: *Response, request: Request) void {
+            return serveFn(self.context, response, request);
         }
     };
 }

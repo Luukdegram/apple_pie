@@ -15,9 +15,9 @@ pub const Request = struct {
 
         //free header memory, perhaps find a better way for perf
         var it = self.headers.iterator();
-        while (it.next()) |kv| {
-            allocator.free(kv.key);
-            allocator.free(kv.value);
+        while (it.next()) |header| {
+            allocator.free(header.key);
+            allocator.free(header.value);
         }
         self.headers.deinit();
         self.url.deinit();
@@ -31,8 +31,9 @@ pub const Request = struct {
 /// Headers is a map that contains name and value of headers
 pub const Headers = std.StringHashMap([]const u8);
 
-/// parse accepts an `io.InStream`, it will read all data it contains
+/// Parse accepts an `io.InStream`, it will read all data it contains
 /// and tries to parse it into a `Request`. Can return `ParseError` if data is corrupt
+/// The memory of the `Request` is owned by the caller and can be freed by using deinit()
 pub fn parse(
     allocator: *std.mem.Allocator,
     stream: var,

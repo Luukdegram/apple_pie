@@ -43,8 +43,10 @@ pub const Url = struct {
 
     /// Builds query parameters from url's `raw_query`
     /// Memory is owned by caller
+    /// Note: For now, each key/value pair needs to be freed manually
     pub fn queryParameters(self: @This(), allocator: *Allocator) !QueryParameters {
         var queries = QueryParameters.init(allocator);
+        errdefer queries.deinit();
 
         var query = self.raw_query;
         while (query.len > 0) {
@@ -100,6 +102,8 @@ fn unescape(allocator: *Allocator, value: []const u8) ![]const u8 {
 
     // replace url encoded string
     var buffer = try allocator.alloc(u8, value.len - 2 * perc_counter);
+    errdefer allocator.free(buffer);
+
     i = 0;
     while (i < buffer.len) : (i += 1) {
         switch (value[i]) {
