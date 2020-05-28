@@ -10,6 +10,8 @@ pub const Request = struct {
     allocator: *std.mem.Allocator,
     protocol: []const u8,
 
+    /// Frees all memory of a Response, as this loops through each header to remove its memory
+    /// you may consider using an arena allocator to free all memory at once for better perf
     pub fn deinit(self: @This()) void {
         const allocator = self.allocator;
 
@@ -66,17 +68,14 @@ pub fn parse(
                 while (parts.next()) |part| : (index += 1) {
                     switch (index) {
                         0 => {
-                            var method_buffer = try allocator.alloc(u8, part.len);
-                            std.mem.copy(u8, method_buffer, part);
-                            request.method = method_buffer;
+                            request.method = try allocator.dupe(u8, part);
                         },
                         1 => {
                             request.url = try Url.init(allocator, part);
                         },
                         2 => {
-                            var proto_buffer = try allocator.alloc(u8, part.len);
-                            std.mem.copy(u8, proto_buffer, part);
-                            request.protocol = proto_buffer;
+                            // remove carrot from end so length -1
+                            request.protocol = try allocator.dupe(u8, part[0 .. part.len - 1]);
                         },
                         else => unreachable,
                     }
@@ -95,13 +94,12 @@ pub fn parse(
                 }
             },
             .Body => {
-                if (request.headers.getValue("Content-Length")) |value| {
-                    const length = try std.fmt.parseInt(usize, value, 10);
-                    var body = try allocator.alloc(u8, length);
-                    _ = try stream.read(body);
-                    request.body = body;
-                    break;
-                }
+                const value = request.headers.getValue("Content-Length") orelse unreachable;
+                const length = try std.fmt.parseInt(usize, value, 10);
+                var body = try allocator.alloc(u8, length);
+                _ = try stream.read(body);
+                request.body = body;
+                break;
             },
         }
     }
@@ -122,14 +120,11 @@ fn parseHeader(headers: *Headers, allocator: *std.mem.Allocator, bytes: []u8) !b
     const key = parts.next() orelse unreachable;
     const value = parts.next() orelse unreachable;
 
-    var key_buffer = try allocator.alloc(u8, key.len);
-    var value_buffer = try allocator.alloc(u8, value.len);
-
-    std.mem.copy(u8, key_buffer, key);
-    std.mem.copy(u8, value_buffer, value);
-
     // overwrite duplicate keys, remove carriage return from value
-    _ = try headers.put(key_buffer, value_buffer);
+    _ = try headers.put(
+        try allocator.dupe(u8, key),
+        try allocator.dupe(u8, value),
+    );
     return true;
 }
 
