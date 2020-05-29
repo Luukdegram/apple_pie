@@ -7,12 +7,14 @@ const Allocator = std.mem.Allocator;
 pub const Request = req.Request;
 pub const Response = resp.Response;
 
+pub const RequestHandler = fn handle(*Response, Request) callconv(.Async) void;
+
 /// Starts a new server on the given `address` and listens for new connections.
 /// Each request will call `handler.serve` to serve the response to the requester.
 pub fn listenAndServe(
     allocator: *Allocator,
     address: net.Address,
-    comptime handler: var,
+    comptime requestHandler: RequestHandler,
 ) !void {
     var server = net.StreamServer.init(.{});
     defer server.deinit();
@@ -36,7 +38,7 @@ pub fn listenAndServe(
             continue;
         };
 
-        _ = async serveRequest(allocator, &connection, handler);
+        _ = async serveRequest(allocator, &connection, requestHandler);
     }
 }
 
@@ -44,8 +46,8 @@ pub fn listenAndServe(
 fn serveRequest(
     allocator: *Allocator,
     connection: *net.StreamServer.Connection,
-    comptime handler: var,
-) void {
+    comptime requestHandler: RequestHandler,
+) callconv(.Async) void {
     // if it fails to accept connection, simply return and don't handle it
     defer connection.file.close();
 
@@ -56,7 +58,7 @@ fn serveRequest(
     var response = Response.init(connection, &arena.allocator);
 
     if (req.parse(&arena.allocator, connection.file.inStream())) |parsed_request| {
-        handler.serve(&response, parsed_request);
+        requestHandler(&response, parsed_request);
     } else |err| {
         _ = response.headers.put("Content-Type", "text/plain;charset=utf-8") catch |e| {
             std.debug.warn("Error setting Content-Type: {}\n", .{e});

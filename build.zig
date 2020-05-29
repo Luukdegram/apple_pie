@@ -15,7 +15,7 @@ pub fn build(b: *Builder) void {
     test_step.dependOn(&main_tests.step);
 
     // Allows for running the example
-    var example = b.addExecutable("example", "example/example.zig");
+    var example = b.addExecutable("example", "examples/example.zig");
     example.addPackagePath("apple_pie", "src/server.zig");
     example.setBuildMode(mode);
     example.install();
