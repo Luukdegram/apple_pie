@@ -9,17 +9,13 @@ pub const Url = struct {
     path: []const u8,
     raw_path: []const u8,
     raw_query: []const u8,
-    allocator: *Allocator,
 
     /// Builds a new URL from a given path
-    pub fn init(allocator: *Allocator, path: []const u8) !Url {
-        var buffer = try allocator.alloc(u8, path.len);
-        std.mem.copy(u8, buffer, path);
-
+    pub fn init(path: []const u8) !Url {
         const query = blk: {
             var raw_query: []const u8 = undefined;
-            if (std.mem.indexOf(u8, buffer, "?")) |index| {
-                raw_query = buffer[index + 1 ..];
+            if (std.mem.indexOf(u8, path, "?")) |index| {
+                raw_query = path[index + 1 ..];
             } else {
                 raw_query = "";
             }
@@ -27,18 +23,10 @@ pub const Url = struct {
         };
 
         return Url{
-            .path = buffer,
-            .raw_path = buffer,
+            .path = path[0 .. path.len - query.len],
+            .raw_path = path,
             .raw_query = query,
-            .allocator = allocator,
         };
-    }
-
-    /// Frees Url's memory
-    pub fn deinit(self: @This()) void {
-        const allocator = self.allocator;
-        // raw_path contains full buffer right now, so free only this for now.
-        allocator.free(self.raw_path);
     }
 
     /// Builds query parameters from url's `raw_query`
@@ -133,16 +121,14 @@ fn isHex(c: u8) bool {
 
 test "Basic raw query" {
     const path = "/example?name=value";
-    const url: Url = try Url.init(testing.allocator, path);
-    defer url.deinit();
+    const url: Url = try Url.init(path);
 
     testing.expectEqualSlices(u8, "name=value", url.raw_query);
 }
 
 test "Retrieve query parameters" {
     const path = "/example?name=value";
-    const url: Url = try Url.init(testing.allocator, path);
-    defer url.deinit();
+    const url: Url = try Url.init(path);
 
     const query_params = try url.queryParameters(testing.allocator);
     defer query_params.deinit();
