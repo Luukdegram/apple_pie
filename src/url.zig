@@ -23,7 +23,7 @@ pub const Url = struct {
         };
 
         return Url{
-            .path = path[0 .. path.len - query.len],
+            .path = path[0 .. path.len - query.len - 1],
             .raw_path = path,
             .raw_query = query,
         };

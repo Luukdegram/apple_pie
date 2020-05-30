@@ -9,6 +9,9 @@ pub const Request = struct {
     body: []const u8,
     allocator: *std.mem.Allocator,
     protocol: []const u8,
+    /// If the buffer was too small to include the body,
+    /// extra memory will be allocated and is freed upon `deinit`
+    allocated_body: bool,
 
     /// Frees all memory of a Response, as this loops through each header to remove its memory
     /// you may consider using an arena allocator to free all memory at once for better perf
@@ -16,10 +19,10 @@ pub const Request = struct {
         const allocator = self.allocator;
 
         self.headers.deinit();
-        if (self.body.len > 0) {
+        allocator.free(self.method);
+        if (self.allocated_body) {
             allocator.free(self.body);
         }
-        allocator.free(self.method);
     }
 };
 
@@ -29,9 +32,12 @@ pub const Headers = std.StringHashMap([]const u8);
 /// Parse accepts an `io.InStream`, it will read all data it contains
 /// and tries to parse it into a `Request`. Can return `ParseError` if data is corrupt
 /// The memory of the `Request` is owned by the caller and can be freed by using deinit()
+/// `buffer_size` is the size that is allocated to parse the request line and headers, any headers
+/// bigger than this size will be skipped.
 pub fn parse(
     allocator: *std.mem.Allocator,
     stream: var,
+    buffer_size: usize,
 ) !Request {
     const State = enum {
         Method,
@@ -47,6 +53,7 @@ pub fn parse(
     request.body = "";
     request.allocator = allocator;
     request.headers = Headers.init(allocator);
+    request.allocated_body = false;
 
     // Accept 4kb for requestline + headers
     // we allocate memory for body if neccesary seperately.
@@ -115,6 +122,7 @@ pub fn parse(
                     std.mem.copy(u8, body, buffer[i..]);
                     _ = try stream.read(body[read - i ..]);
                     request.body = body;
+                    request.allocated_body = true;
                 }
                 break;
             },
@@ -129,15 +137,18 @@ test "Basic request parse" {
     const contents = "GET /test?test HTTP/1.1\r\n" ++
         "Host: localhost:8080\r\n" ++
         "User-Agent: insomnia/7.1.1\r\n" ++
-        "Accept: */*\r\n\r\n";
+        "Accept: */*\r\n" ++
+        "Content-Length: 9\r\n" ++
+        "\r\n" ++
+        "some body";
 
     const stream = std.io.fixedBufferStream(contents).inStream();
-    var request = try parse(allocator, stream);
+    var request = try parse(allocator, stream, 4096);
     defer request.deinit();
 
-    std.testing.expect(request.headers.size == 3);
-    std.testing.expectEqualSlices(u8, "/test?test", request.url.path);
+    std.testing.expect(request.headers.size == 4);
+    std.testing.expectEqualSlices(u8, "/test", request.url.path);
     std.testing.expectEqualSlices(u8, "HTTP/1.1", request.protocol);
     std.testing.expectEqualSlices(u8, "GET", request.method);
-    std.testing.expect(request.body.len == 0);
+    std.testing.expect(request.body.len == "some body".len);
 }

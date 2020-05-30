@@ -20,14 +20,21 @@ pub const Server = struct {
     allocator: *Allocator,
     frame_stack: []align(16) u8,
 
-    pub fn init(allocator: *Allocator, address: net.Address, comptime handlerFn: RequestHandler) !Server {
+    /// Initializes a new Server with its default values,
+    /// also calculates and allocates a buffer for the frame stack
+    /// which needs to be freed with deinit().
+    pub fn init(
+        allocator: *Allocator,
+        address: net.Address,
+        comptime handlerFn: RequestHandler,
+    ) !Server {
         return Server{
             .address = address,
             .request_handler = handlerFn,
             .allocator = allocator,
             .should_stop = std.atomic.Int(u1).init(0),
             // default options, users can set backlog using `setMaxConnections`
-            .host_connection = net.StreamServer.init(.{}),
+            .host_connection = net.StreamServer.init(.{ .reuse_address = true }),
             .frame_stack = try allocator.alignedAlloc(
                 u8,
                 16,
@@ -58,16 +65,11 @@ pub const Server = struct {
         // deinit also closes the connection
         defer server.deinit();
 
-        server.listen(self.address) catch |err| switch (err) {
-            error.AddressInUse,
-            error.AddressNotAvailable,
-            => return err,
-            else => return error.ListenError,
-        };
+        try server.listen(self.address);
 
         var retries: usize = 0;
         while (self.should_stop.get() == 0) {
-            var connection: net.StreamServer.Connection = server.accept() catch |err| {
+            var connection = server.accept() catch |err| {
                 if (retries > 4) return err;
                 std.debug.warn("Could not accept connection: {}\nRetrying...\n", .{err});
 
@@ -83,13 +85,13 @@ pub const Server = struct {
 };
 
 /// Starts a new server on the given `address` and listens for new connections.
-/// Each request will call `handler.serve` to serve the response to the requester.
+/// Each request will call `request_handler` to serve the response to the requester.
 pub fn listenAndServe(
     allocator: *Allocator,
     address: net.Address,
-    comptime requestHandler: RequestHandler,
+    comptime request_handler: RequestHandler,
 ) !void {
-    var server = try Server.init(allocator, address, requestHandler);
+    var server = try Server.init(allocator, address, request_handler);
     try server.start();
 }
 
@@ -98,6 +100,8 @@ fn serveRequest(
     server: *Server,
     connection: *net.StreamServer.Connection,
 ) callconv(.Async) void {
+    // don't handle keep-alives for now,
+    // http/2.0 is the better solution for pipelining
     defer connection.file.close();
 
     // use an arena allocator to free all memory at once as it performs better than
@@ -106,7 +110,12 @@ fn serveRequest(
     defer arena.deinit();
     var response = Response.init(connection, &arena.allocator);
 
-    if (req.parse(&arena.allocator, connection.file.inStream())) |*parsed_request| {
+    // parse the HTTP Request and if successful, call the handler function asynchronous
+    if (req.parse(
+        &arena.allocator,
+        connection.file.inStream(),
+        server.request_buffer_size,
+    )) |*parsed_request| {
         // call the function of the implementer
         var frame = @asyncCall(server.frame_stack, {}, server.request_handler, &response, parsed_request.*);
         await frame;
