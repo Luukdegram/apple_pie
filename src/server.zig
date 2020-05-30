@@ -65,22 +65,11 @@ fn serveRequest(
             return;
         };
 
-        switch (err) {
-            error.StreamTooLong => {
-                response.status_code = 431;
-                response.write("431 Request Header Fields Too Large") catch |e| {
-                    std.debug.warn("Error writing response: {}\n", .{e});
-                    return;
-                };
-            },
-            else => {
-                response.status_code = 400;
-                response.write("400 Bad Request") catch |e| {
-                    std.debug.warn("Error writing response: {}\n", .{e});
-                    return;
-                };
-            },
-        }
+        response.status_code = 400;
+        response.write("400 Bad Request") catch |e| {
+            std.debug.warn("Error writing response: {}\n", .{e});
+            return;
+        };
     }
 }
 
