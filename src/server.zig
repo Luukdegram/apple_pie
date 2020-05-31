@@ -115,9 +115,10 @@ fn serveRequest(
         &arena.allocator,
         connection.file.inStream(),
         server.request_buffer_size,
-    )) |*parsed_request| {
+    )) |parsed_request| {
+        //std.debug.warn("path: {}\n", .{parsed_request.*.url.path});
         // call the function of the implementer
-        var frame = @asyncCall(server.frame_stack, {}, server.request_handler, &response, parsed_request.*);
+        var frame = @asyncCall(server.frame_stack, {}, server.request_handler, &response, parsed_request);
         await frame;
     } else |err| {
         _ = response.headers.put("Content-Type", "text/plain;charset=utf-8") catch |e| {

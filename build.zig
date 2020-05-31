@@ -16,7 +16,7 @@ pub fn build(b: *Builder) void {
 
     // Allows for running the example
     var example = b.addExecutable("example", "examples/example.zig");
-    example.addPackagePath("apple_pie", "src/server.zig");
+    example.addPackagePath("apple_pie", "src/apple_pie.zig");
     example.setBuildMode(mode);
     example.install();
 
