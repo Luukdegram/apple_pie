@@ -99,8 +99,6 @@ pub const StaticFileServer = struct {
         var static_file: StaticFile = undefined;
         var cache_allocator = allocator;
 
-        std.debug.warn("Handle called\n", .{});
-
         if (file_cache.get(request.url.path[1..])) |f| {
             static_file = f;
             file = std.fs.cwd().openFile(f.path, .{}) catch |err| {
@@ -144,15 +142,21 @@ pub const StaticFileServer = struct {
 
         if (file) |f| {
             defer f.close();
-
-            const size = f.getEndPos() catch return;
+            const size = f.getEndPos() catch {
+                std.debug.warn("TEST\n", .{});
+                return;
+            };
+            std.debug.warn("size: {}\n", .{size});
             var buffer = cache_allocator.alloc(u8, size) catch {
                 sendNotFound(response);
                 return;
             };
             defer cache_allocator.free(buffer);
             _ = f.inStream().read(buffer) catch |err| {
-                std.debug.warn("Error reading from the file: {}\n", .{err});
+                switch (err) {
+                    error.IsDir => {},
+                    else => std.debug.warn("Error reading from the file: {}\n", .{err}),
+                }
                 sendNotFound(response);
                 return;
             };
@@ -181,12 +185,14 @@ fn sendNotFound(response: *Response) void {
 
 /// Tries to find the file on the host's system
 fn findFile(path: []const u8) !?std.fs.File {
-    var file = std.fs.cwd().openFile(path, .{}) catch {
-        return null;
-    };
-    return file;
-
-    //if file.is
+    var tmp: std.fs.Dir = std.fs.cwd();
+    if (std.fs.path.dirname(path) == null) {
+        var file: std.fs.File = tmp.openFile(path, .{}) catch {
+            return null;
+        };
+        return file;
+    }
+    return null;
 }
 
 pub const StaticFile = struct {

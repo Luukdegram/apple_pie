@@ -68,7 +68,7 @@ pub const Server = struct {
         try server.listen(self.address);
 
         var retries: usize = 0;
-        while (self.should_stop.get() == 0) {
+        while (true) {
             var connection = server.accept() catch |err| {
                 if (retries > 4) return err;
                 std.debug.warn("Could not accept connection: {}\nRetrying...\n", .{err});
@@ -101,7 +101,6 @@ fn serveRequest(
     connection: *net.StreamServer.Connection,
 ) callconv(.Async) void {
     // don't handle keep-alives for now,
-    // http/2.0 is the better solution for pipelining
     defer connection.file.close();
 
     // use an arena allocator to free all memory at once as it performs better than
@@ -116,9 +115,16 @@ fn serveRequest(
         connection.file.inStream(),
         server.request_buffer_size,
     )) |parsed_request| {
-        //std.debug.warn("path: {}\n", .{parsed_request.*.url.path});
         // call the function of the implementer
-        var frame = @asyncCall(server.frame_stack, {}, server.request_handler, &response, parsed_request);
+        var frame = @asyncCall(
+            server.frame_stack,
+            {},
+            server.request_handler,
+            &response,
+            parsed_request,
+        );
+
+        // await frame to ensure we close connection after completing serving the the response
         await frame;
     } else |err| {
         _ = response.headers.put("Content-Type", "text/plain;charset=utf-8") catch |e| {

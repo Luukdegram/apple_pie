@@ -51,9 +51,12 @@ pub fn parse(
 
     var request: Request = undefined;
     request.body = "";
+    request.method = "GET";
+    request.url = try Url.init("/");
     request.allocator = allocator;
     request.headers = Headers.init(allocator);
     request.allocated_body = false;
+    request.protocol = "HTTP/1.1";
 
     // Accept 4kb for requestline + headers
     // we allocate memory for body if neccesary seperately.
