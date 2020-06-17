@@ -3,11 +3,17 @@ const Url = @import("url.zig").Url;
 
 /// Represents a request made by a client
 pub const Request = struct {
+    /// GET, POST, PUT, DELETE or PATCH
     method: []const u8,
+    /// Url object, get be used to retrieve path or query parameters
     url: Url,
-    headers: Headers,
+    /// Headers according to http2
+    headers: std.http.Headers,
+    /// Body, which can be empty
     body: []const u8,
+    /// allocator which is used to free Request's memory
     allocator: *std.mem.Allocator,
+    /// Protocol used by the requester, http1.1, http2.0, etc.
     protocol: []const u8,
     /// If the buffer was too small to include the body,
     /// extra memory will be allocated and is freed upon `deinit`
@@ -25,9 +31,6 @@ pub const Request = struct {
         }
     }
 };
-
-/// Headers is a map that contains name and value of headers
-pub const Headers = std.StringHashMap([]const u8);
 
 /// Parse accepts an `io.InStream`, it will read all data it contains
 /// and tries to parse it into a `Request`. Can return `ParseError` if data is corrupt
@@ -54,7 +57,7 @@ pub fn parse(
     request.method = "GET";
     request.url = try Url.init("/");
     request.allocator = allocator;
-    request.headers = Headers.init(allocator);
+    request.headers = std.http.Headers.init(allocator);
     request.allocated_body = false;
     request.protocol = "HTTP/1.1";
 
@@ -110,11 +113,12 @@ pub fn parse(
                 const end = std.mem.indexOf(u8, buffer[i..], "\r\n") orelse return error.IncorrectHeader;
                 const value = buffer[i .. i + end];
                 i += value.len + 2; //skip \r\n
-                _ = try request.headers.put(key, value);
+                _ = try request.headers.append(key, value, null);
             },
             .Body => {
-                const value = request.headers.getValue("Content-Length") orelse unreachable;
-                const length = try std.fmt.parseInt(usize, value, 10);
+                const entries = (try request.headers.get(allocator, "Content-Length")).?;
+                defer allocator.free(entries);
+                const length = try std.fmt.parseInt(usize, entries[0].value, 10);
 
                 // if body fit inside the 4kb buffer, we use that,
                 // else allocate more memory
@@ -149,7 +153,7 @@ test "Basic request parse" {
     var request = try parse(allocator, stream, 4096);
     defer request.deinit();
 
-    std.testing.expect(request.headers.size == 4);
+    std.testing.expect(request.headers.data.items.len == 4);
     std.testing.expectEqualSlices(u8, "/test", request.url.path);
     std.testing.expectEqualSlices(u8, "HTTP/1.1", request.protocol);
     std.testing.expectEqualSlices(u8, "GET", request.method);

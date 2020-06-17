@@ -15,7 +15,7 @@ pub const Url = struct {
         const query = blk: {
             var raw_query: []const u8 = undefined;
             if (std.mem.indexOf(u8, path, "?")) |index| {
-                raw_query = path[index + 1 ..];
+                raw_query = path[index..];
             } else {
                 raw_query = "";
             }
@@ -37,6 +37,9 @@ pub const Url = struct {
         errdefer queries.deinit();
 
         var query = self.raw_query;
+        if (std.mem.startsWith(u8, query, "?")) {
+            query = query[1..];
+        }
         while (query.len > 0) {
             var key = query;
             if (std.mem.indexOfAny(u8, key, "&")) |index| {
@@ -123,7 +126,7 @@ test "Basic raw query" {
     const path = "/example?name=value";
     const url: Url = try Url.init(path);
 
-    testing.expectEqualSlices(u8, "name=value", url.raw_query);
+    testing.expectEqualSlices(u8, "?name=value", url.raw_query);
 }
 
 test "Retrieve query parameters" {
