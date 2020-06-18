@@ -18,11 +18,43 @@ pub const Server = struct {
     address: net.Address,
     request_handler: RequestHandler,
     allocator: *Allocator,
-    frame_stack: []align(16) u8,
+    resolved: std.atomic.Stack(*Connection),
+
+    const Connection = struct {
+        frame_stack: []align(16) u8,
+        server: *Server,
+        conn: *net.StreamServer.Connection,
+        frame: @Frame(serveRequest),
+        node: std.atomic.Stack(*Connection).Node,
+
+        fn init(server: *Server, conn: *net.StreamServer.Connection) !*Connection {
+            var connection = try server.allocator.create(Connection);
+            errdefer server.allocator.destroy(connection);
+
+            var stack = try server.allocator.alignedAlloc(u8, 16, 4 * 1024 * 1024);
+            errdefer server.allocator.free(stack);
+
+            connection.* = .{
+                .frame_stack = stack,
+                .server = server,
+                .conn = conn,
+                .frame = undefined,
+                .node = .{
+                    .next = null,
+                    .data = connection,
+                },
+            };
+
+            return connection;
+        }
+
+        fn deinit(self: *Connection) void {
+            self.conn.file.close();
+            self.server.allocator.free(self.frame_stack);
+        }
+    };
 
     /// Initializes a new Server with its default values,
-    /// also calculates and allocates a buffer for the frame stack
-    /// which needs to be freed with deinit().
     pub fn init(
         allocator: *Allocator,
         address: net.Address,
@@ -35,11 +67,7 @@ pub const Server = struct {
             .should_stop = std.atomic.Int(u1).init(0),
             // default options, users can set backlog using `setMaxConnections`
             .host_connection = net.StreamServer.init(.{ .reuse_address = true }),
-            .frame_stack = try allocator.alignedAlloc(
-                u8,
-                16,
-                @sizeOf(@Frame(handlerFn)),
-            ),
+            .resolved = std.atomic.Stack(*Connection).init(),
         };
     }
 
@@ -55,9 +83,7 @@ pub const Server = struct {
     }
 
     /// Frees the frame stack
-    pub fn deinit(self: Self) void {
-        self.allocator.free(self.frame_stack);
-    }
+    pub fn deinit(self: Self) void {}
 
     /// Starts listening for connections and serves responses
     pub fn start(self: *Self) !void {
@@ -79,7 +105,14 @@ pub const Server = struct {
                 continue;
             };
 
-            _ = async serveRequest(self, &connection);
+            var conn = try Connection.init(self, &connection);
+
+            conn.frame = async serveRequest(conn);
+
+            while (self.resolved.pop()) |node| {
+                node.data.deinit();
+                self.allocator.destroy(node.data);
+            }
         }
     }
 };
@@ -97,29 +130,28 @@ pub fn listenAndServe(
 
 /// Handles a request and returns a response based on the given handler function
 fn serveRequest(
-    server: *Server,
-    connection: *net.StreamServer.Connection,
+    connection: *Server.Connection,
 ) callconv(.Async) void {
     // don't handle keep-alives for now,
-    defer connection.file.close();
+    defer connection.server.resolved.push(&connection.node);
 
     // use an arena allocator to free all memory at once as it performs better than
     // freeing everything individually.
-    var arena = std.heap.ArenaAllocator.init(server.allocator);
+    var arena = std.heap.ArenaAllocator.init(connection.server.allocator);
     defer arena.deinit();
-    var response = Response.init(connection, &arena.allocator);
+    var response = Response.init(connection.conn, &arena.allocator);
 
     // parse the HTTP Request and if successful, call the handler function asynchronous
     if (req.parse(
         &arena.allocator,
-        connection.file.inStream(),
-        server.request_buffer_size,
+        connection.conn.file.inStream(),
+        connection.server.request_buffer_size,
     )) |parsed_request| {
         // call the function of the implementer
         var frame = @asyncCall(
-            server.frame_stack,
+            connection.frame_stack,
             {},
-            server.request_handler,
+            connection.server.request_handler,
             &response,
             parsed_request,
         );
