@@ -63,7 +63,7 @@ pub fn parse(
 
     // Accept 4kb for requestline + headers
     // we allocate memory for body if neccesary seperately.
-    var buffer = try allocator.alloc(u8, 4096);
+    var buffer = try allocator.alloc(u8, buffer_size);
 
     const read = try stream.read(buffer);
     buffer = buffer[0..read];

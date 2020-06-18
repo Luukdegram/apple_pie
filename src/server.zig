@@ -31,8 +31,7 @@ pub const Server = struct {
             var connection = try server.allocator.create(Connection);
             errdefer server.allocator.destroy(connection);
 
-            var stack = try server.allocator.alignedAlloc(u8, 16, 4 * 1024 * 1024);
-            errdefer server.allocator.free(stack);
+            var stack = try server.allocator.alignedAlloc(u8, 16, @frameSize(server.request_handler));
 
             connection.* = .{
                 .frame_stack = stack,
@@ -58,7 +57,7 @@ pub const Server = struct {
     pub fn init(
         allocator: *Allocator,
         address: net.Address,
-        comptime handlerFn: RequestHandler,
+        handlerFn: RequestHandler,
     ) !Server {
         return Server{
             .address = address,
@@ -122,7 +121,7 @@ pub const Server = struct {
 pub fn listenAndServe(
     allocator: *Allocator,
     address: net.Address,
-    comptime request_handler: RequestHandler,
+    request_handler: RequestHandler,
 ) !void {
     var server = try Server.init(allocator, address, request_handler);
     try server.start();
@@ -131,7 +130,7 @@ pub fn listenAndServe(
 /// Handles a request and returns a response based on the given handler function
 fn serveRequest(
     connection: *Server.Connection,
-) callconv(.Async) void {
+) void {
     // don't handle keep-alives for now,
     defer connection.server.resolved.push(&connection.node);
 
@@ -147,17 +146,15 @@ fn serveRequest(
         connection.conn.file.inStream(),
         connection.server.request_buffer_size,
     )) |parsed_request| {
+
         // call the function of the implementer
-        var frame = @asyncCall(
+        await @asyncCall(
             connection.frame_stack,
             {},
             connection.server.request_handler,
             &response,
             parsed_request,
         );
-
-        // await frame to ensure we close connection after completing serving the the response
-        await frame;
     } else |err| {
         _ = response.headers.put("Content-Type", "text/plain;charset=utf-8") catch |e| {
             std.debug.warn("Error setting Content-Type: {}\n", .{e});
