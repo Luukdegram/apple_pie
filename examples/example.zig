@@ -4,13 +4,13 @@ const http = @import("apple_pie");
 pub const io_mode = .evented;
 
 pub fn main() !void {
-    http.server.listenAndServe(
+    var static = try http.StaticFileServer.init(std.heap.page_allocator, "src/");
+    defer static.deinit();
+    try http.server.listenAndServe(
         std.heap.page_allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),
-        index,
-    ) catch |err| {
-        std.debug.print("Error: {}\n", .{err});
-    };
+        http.StaticFileServer.handle,
+    );
 }
 
 fn index(response: *http.Response, request: http.Request) !void {

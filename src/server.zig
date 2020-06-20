@@ -133,25 +133,24 @@ pub fn listenAndServe(
 /// Handles a request and returns a response based on the given handler function
 fn serveRequest(
     connection: *Server.Connection,
-) void {
+) !void {
     defer connection.server.resolved.push(&connection.node);
-
-    // use an arena allocator to free all memory at once as it performs better than
-    // freeing everything individually.
-    var arena = std.heap.ArenaAllocator.init(connection.server.allocator);
-    defer arena.deinit();
     // keep-alive
     while (true) {
+        // use an arena allocator to free all memory at once as it performs better than
+        // freeing everything individually.
+        var arena = std.heap.ArenaAllocator.init(connection.server.allocator);
+        defer arena.deinit();
         var response = Response.init(connection.conn.file.handle, &arena.allocator);
 
         // parse the HTTP Request and if successful, call the handler function asynchronous
-        var req_frame = req.parse(
+        var request = req.parse(
             &arena.allocator,
             connection.conn.file.inStream(),
             connection.server.request_buffer_size,
         );
 
-        if (req_frame) |parsed_request| {
+        if (request) |parsed_request| {
             var frame = @asyncCall(
                 connection.frame_stack,
                 {},
@@ -170,21 +169,27 @@ fn serveRequest(
                 }
             };
 
-            // TODO, if connection is Close or if single threaded mode, break out of while
+            // if user did not call response.write(), create an empty response
+            // to ensure the client receives one.
+            if (!response.is_dirty) {
+                try response.write("");
+            }
+
+            if (!std.io.is_async) break;
+
+            if (parsed_request.headers.contains("Connection")) {
+                const entries = (try parsed_request.headers.get(&arena.allocator, "Connection")).?;
+                arena.allocator.free(entries);
+                if (std.ascii.eqlIgnoreCase(entries[0].value, "close")) {
+                    break;
+                }
+            }
         } else |err| {
-            _ = response.headers.put("Content-Type", "text/plain;charset=utf-8") catch |e| {
-                std.debug.warn("Error setting Content-Type: {}\n", .{e});
-                return;
-            };
+            _ = try response.headers.put("Content-Type", "text/plain;charset=utf-8");
 
             response.status_code = 400;
-            response.write("400 Bad Request") catch |e| {
-                std.debug.warn("Error writing response: {}\n", .{e});
-                return;
-            };
+            try response.write("400 Bad Request");
             break;
         }
-        arena.deinit();
-        arena = std.heap.ArenaAllocator.init(connection.server.allocator);
     }
 }

@@ -145,13 +145,14 @@ pub const Response = struct {
     status_code: u16 = 200,
     /// StringHashMap([]const u8) with key and value of headers
     headers: Headers,
-    allocator: *Allocator,
+    /// Buffered writer that writes to our socket
     writer: std.io.BufferedWriter(4096, SocketWriter),
+    /// True when write() has been called
+    is_dirty: bool = false,
 
     /// Creates a new Response object with its connection set
     pub fn init(handle: std.os.fd_t, allocator: *Allocator) Response {
         return Response{
-            .allocator = allocator,
             .headers = Headers.init(allocator),
             .writer = std.io.bufferedOutStream(SocketWriter{ .handle = handle }),
         };
@@ -159,6 +160,7 @@ pub const Response = struct {
 
     /// Writes HTTP Response to the peer
     pub fn write(self: *@This(), contents: []const u8) !void {
+        self.is_dirty = true;
         var stream = self.writer.outStream();
 
         // write status line

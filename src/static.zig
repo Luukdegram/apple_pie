@@ -94,93 +94,68 @@ pub const StaticFileServer = struct {
 
     /// The handler function that will be called each request.
     /// Make sure to call init() before using this function.
-    pub fn handle(response: *Response, request: Request) callconv(.Async) void {
+    pub fn handle(response: *Response, request: Request) callconv(.Async) !void {
         var file: ?std.fs.File = null;
         var static_file: StaticFile = undefined;
         var cache_allocator = allocator;
 
+        errdefer {
+            sendNotFound(response) catch {};
+        }
+
         if (file_cache.get(request.url.path[1..])) |f| {
             static_file = f;
-            file = std.fs.cwd().openFile(f.path, .{}) catch |err| {
-                std.debug.warn("Error opening file: {}\n", .{err});
-                sendNotFound(response);
-                return;
-            };
+            file = try std.fs.cwd().openFile(f.path, .{});
         } else {
-            var full_path = std.fs.path.join(cache_allocator, &[_][]const u8{
+            var full_path = try std.fs.path.join(cache_allocator, &[_][]const u8{
                 file_cache.base_path,
                 request.url.path,
-            }) catch {
-                sendNotFound(response);
-                return;
-            };
+            });
+            errdefer cache_allocator.free(full_path);
 
-            var possible_file = findFile(full_path) catch {
-                cache_allocator.free(full_path);
-            };
+            var possible_file = try findFile(full_path);
 
             if (possible_file) |f| {
                 file = f;
+                errdefer f.close();
 
-                const name = cache_allocator.dupe(u8, request.url.path) catch {
-                    cache_allocator.free(full_path);
-                    f.close();
-                    sendNotFound(response);
-                    return;
-                };
+                const name = try cache_allocator.dupe(u8, request.url.path);
+                errdefer cache_allocator.free(name);
 
                 static_file = StaticFile.init(name, full_path);
-                file_cache.put(static_file) catch {
-                    cache_allocator.free(full_path);
-                    cache_allocator.free(name);
-                    f.close();
-                    sendNotFound(response);
-                    return;
-                };
+                try file_cache.put(static_file);
             }
         }
 
         if (file) |f| {
             defer f.close();
-            const size = f.getEndPos() catch {
-                std.debug.warn("TEST\n", .{});
-                return;
-            };
-            std.debug.warn("size: {}\n", .{size});
-            var buffer = cache_allocator.alloc(u8, size) catch {
-                sendNotFound(response);
-                return;
-            };
+            const size = try f.getEndPos();
+
+            var buffer = try cache_allocator.alloc(u8, size);
             defer cache_allocator.free(buffer);
+
             _ = f.inStream().read(buffer) catch |err| {
                 switch (err) {
-                    error.IsDir => {},
-                    else => std.debug.warn("Error reading from the file: {}\n", .{err}),
+                    error.IsDir => return,
+                    else => std.debug.print("Error reading from the file: {}\n", .{err}),
                 }
-                sendNotFound(response);
-                return;
+                return err;
             };
 
             // static_file is set if file is also not null
-            _ = response.headers.put("Content-Type", static_file.mime_type.toType()) catch {
-                sendNotFound(response);
-                return;
-            };
+            _ = try response.headers.put("Content-Type", static_file.mime_type.toType());
 
-            response.write(buffer) catch {
-                sendNotFound(response);
-            };
+            try response.write(buffer);
         } else {
-            sendNotFound(response);
+            try sendNotFound(response);
         }
     }
 };
 
-fn sendNotFound(response: *Response) void {
+/// Sends a 404 Resource not found response
+fn sendNotFound(response: *Response) !void {
     response.status_code = 404;
-    response.write("Resource not found") catch {
-        return;
-    };
+    try response.write("Resource not found");
 }
 
 /// Tries to find the file on the host's system
@@ -222,6 +197,10 @@ pub const StaticFile = struct {
             .extension = extension,
             .mime_type = MimeType.fromExtension(extension),
         };
+    }
+
+    pub fn open(self: StaticFile) !?std.fs.File {
+        //std.os.open(file_path: []const u8, flags: u32, perm: mode_t)
     }
 };
 
