@@ -110,28 +110,56 @@ const StatusCode = enum(u16) {
 /// Headers is an alias to `std.StringHashMap([]const u8)`
 pub const Headers = std.StringHashMap([]const u8);
 
+/// SocketWriter writes to a socket and sets the
+/// MSG_NOSIGNAL flag to ignore BrokenPipe signals
+/// This is needed so the server does not get interrupted
+pub const SocketWriter = struct {
+    handle: std.os.fd_t,
+
+    /// Use os' SendError
+    pub const Error = std.os.SendError;
+
+    /// Uses fmt to format the given bytes and writes to the socket
+    pub fn print(self: SockerWriter, comptime format: []const u8, args: var) Error!usize {
+        return std.fmt.format(self, format, args);
+    }
+
+    /// writes to the socket
+    /// Note that this may not write all bytes, use writeAll for that
+    pub fn write(self: SocketWriter, bytes: []const u8) Error!usize {
+        return std.os.send(self.handle, bytes, std.os.MSG_NOSIGNAL);
+    }
+
+    /// Loops untill all bytes have been written to the socket
+    pub fn writeAll(self: SocketWriter, bytes: []const u8) Error!void {
+        var index: usize = 0;
+        while (index != bytes.len) {
+            index += try self.write(bytes[index..]);
+        }
+    }
+};
+
 /// Response allows to set the status code and content of the response
 pub const Response = struct {
-    /// current connection between server and peer
-    connection: *net.StreamServer.Connection,
     /// status code of the response, 200 by default
     status_code: u16 = 200,
     /// StringHashMap([]const u8) with key and value of headers
     headers: Headers,
     allocator: *Allocator,
+    writer: std.io.BufferedWriter(4096, SocketWriter),
 
     /// Creates a new Response object with its connection set
-    pub fn init(connection: *net.StreamServer.Connection, allocator: *Allocator) Response {
+    pub fn init(handle: std.os.fd_t, allocator: *Allocator) Response {
         return Response{
-            .connection = connection,
             .allocator = allocator,
             .headers = Headers.init(allocator),
+            .writer = std.io.bufferedOutStream(SocketWriter{ .handle = handle }),
         };
     }
 
     /// Writes HTTP Response to the peer
-    pub fn write(self: @This(), contents: []const u8) !void {
-        var stream = self.connection.file.outStream();
+    pub fn write(self: *@This(), contents: []const u8) !void {
+        var stream = self.writer.outStream();
 
         // write status line
         const status_code_string = @intToEnum(StatusCode, self.status_code).string();
@@ -148,15 +176,11 @@ pub const Response = struct {
             try stream.print("Content-Length: {}\r\n", .{contents.len});
         }
 
-        // close by default unless specified by user
-        if (!self.headers.contains("Connection")) {
-            try stream.print("Connection: close\r\n", .{});
-        }
-
         // Carrot Return after headers to tell clients where headers end, and body starts
         _ = try stream.write("\r\n");
 
         _ = try stream.writeAll(contents);
+        try self.writer.flush();
     }
 
     /// frees memory of `headers`

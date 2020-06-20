@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 pub const Request = req.Request;
 pub const Response = resp.Response;
 
-pub const RequestHandler = fn handle(*Response, Request) callconv(.Async) void;
+pub const RequestHandler = fn handle(*Response, Request) callconv(.Async) anyerror!void;
 
 pub const Server = struct {
     const Self = @This();
@@ -23,11 +23,11 @@ pub const Server = struct {
     const Connection = struct {
         frame_stack: []align(16) u8,
         server: *Server,
-        conn: *net.StreamServer.Connection,
+        conn: net.StreamServer.Connection,
         frame: @Frame(serveRequest),
         node: std.atomic.Stack(*Connection).Node,
 
-        fn init(server: *Server, conn: *net.StreamServer.Connection) !*Connection {
+        fn init(server: *Server, conn: net.StreamServer.Connection) !*Connection {
             var connection = try server.allocator.create(Connection);
             errdefer server.allocator.destroy(connection);
 
@@ -104,7 +104,10 @@ pub const Server = struct {
                 continue;
             };
 
-            var conn = try Connection.init(self, &connection);
+            var conn = Connection.init(self, connection) catch {
+                connection.file.close();
+                continue;
+            };
 
             conn.frame = async serveRequest(conn);
 
@@ -131,40 +134,57 @@ pub fn listenAndServe(
 fn serveRequest(
     connection: *Server.Connection,
 ) void {
-    // don't handle keep-alives for now,
     defer connection.server.resolved.push(&connection.node);
 
     // use an arena allocator to free all memory at once as it performs better than
     // freeing everything individually.
     var arena = std.heap.ArenaAllocator.init(connection.server.allocator);
     defer arena.deinit();
-    var response = Response.init(connection.conn, &arena.allocator);
+    // keep-alive
+    while (true) {
+        var response = Response.init(connection.conn.file.handle, &arena.allocator);
 
-    // parse the HTTP Request and if successful, call the handler function asynchronous
-    if (req.parse(
-        &arena.allocator,
-        connection.conn.file.inStream(),
-        connection.server.request_buffer_size,
-    )) |parsed_request| {
-
-        // call the function of the implementer
-        await @asyncCall(
-            connection.frame_stack,
-            {},
-            connection.server.request_handler,
-            &response,
-            parsed_request,
+        // parse the HTTP Request and if successful, call the handler function asynchronous
+        var req_frame = req.parse(
+            &arena.allocator,
+            connection.conn.file.inStream(),
+            connection.server.request_buffer_size,
         );
-    } else |err| {
-        _ = response.headers.put("Content-Type", "text/plain;charset=utf-8") catch |e| {
-            std.debug.warn("Error setting Content-Type: {}\n", .{e});
-            return;
-        };
 
-        response.status_code = 400;
-        response.write("400 Bad Request") catch |e| {
-            std.debug.warn("Error writing response: {}\n", .{e});
-            return;
-        };
+        if (req_frame) |parsed_request| {
+            var frame = @asyncCall(
+                connection.frame_stack,
+                {},
+                connection.server.request_handler,
+                &response,
+                parsed_request,
+            );
+
+            await frame catch |err| {
+                switch (err) {
+                    std.os.SendError.BrokenPipe => break,
+                    else => {
+                        std.debug.print("Unexpected error: {}\n", .{err});
+                        break;
+                    },
+                }
+            };
+
+            // TODO, if connection is Close or if single threaded mode, break out of while
+        } else |err| {
+            _ = response.headers.put("Content-Type", "text/plain;charset=utf-8") catch |e| {
+                std.debug.warn("Error setting Content-Type: {}\n", .{e});
+                return;
+            };
+
+            response.status_code = 400;
+            response.write("400 Bad Request") catch |e| {
+                std.debug.warn("Error writing response: {}\n", .{e});
+                return;
+            };
+            break;
+        }
+        arena.deinit();
+        arena = std.heap.ArenaAllocator.init(connection.server.allocator);
     }
 }
