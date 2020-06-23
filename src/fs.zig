@@ -25,7 +25,8 @@ pub fn deinit() void {
     dir.close();
 }
 
-pub fn serve(response: *Response, request: Request) callconv(.Async) !void {
+/// Servers a file based on the path of the request
+pub fn serve(response: *Response, request: Request) !void {
     std.debug.assert(initialized);
 
     var file = dir.openFile(request.url.path[1..], .{}) catch {

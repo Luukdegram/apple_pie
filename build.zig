@@ -1,4 +1,5 @@
-const Builder = @import("std").build.Builder;
+const std = @import("std");
+const Builder = std.build.Builder;
 
 pub fn build(b: *Builder) void {
     // builds the library as a static library
@@ -14,8 +15,23 @@ pub fn build(b: *Builder) void {
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&main_tests.step);
 
+    const opt = b.option([]const u8, "example", "The example to build & run") orelse "";
+    const example_file = blk: {
+        var file: []const u8 = undefined;
+        file = "examples/basic.zig";
+
+        if (std.mem.eql(u8, opt, "router")) {
+            file = "examples/router.zig";
+        }
+
+        if (std.mem.eql(u8, opt, "static")) {
+            file = "examples/static.zig";
+        }
+        break :blk file;
+    };
+
     // Allows for running the example
-    var example = b.addExecutable("example", "examples/example.zig");
+    var example = b.addExecutable("example", example_file);
     example.addPackagePath("apple_pie", "src/apple_pie.zig");
     example.setBuildMode(mode);
     example.install();
