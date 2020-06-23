@@ -178,15 +178,24 @@ pub const Response = struct {
             try stream.print("Content-Length: {}\r\n", .{contents.len});
         }
 
-        // Carrot Return after headers to tell clients where headers end, and body starts
-        _ = try stream.write("\r\n");
+        if (!std.io.is_async) {
+            try stream.writeAll("Connection: Close\r\n");
+        }
 
-        _ = try stream.writeAll(contents);
+        // Carrot Return after headers to tell clients where headers end, and body starts
+        try stream.writeAll("\r\n");
+
+        try stream.writeAll(contents);
         try self.writer.flush();
     }
 
+    pub fn notFound(self: *@This()) !void {
+        self.status_code = 404;
+        try self.write("Resource not found\n");
+    }
+
     /// frees memory of `headers`
-    fn deinit(self: @This()) void {
+    pub fn deinit(self: @This()) void {
         self.headers.deinit();
     }
 };

@@ -169,18 +169,28 @@ fn serveRequest(
                 }
             };
 
-            // if user did not call response.write(), create an empty response
-            // to ensure the client receives one.
+            // if user did not call response.write(), create a 404 resource not found
+            // to ensure the client receives a response but no valid reply is possible.
             if (!response.is_dirty) {
-                try response.write("");
+                try response.notFound();
             }
 
+            // We don't support keep-alive in blocking mode as it would block
+            // other requests
             if (!std.io.is_async) break;
 
+            // if the client requests to close the connection
             if (parsed_request.headers.contains("Connection")) {
                 const entries = (try parsed_request.headers.get(&arena.allocator, "Connection")).?;
                 arena.allocator.free(entries);
                 if (std.ascii.eqlIgnoreCase(entries[0].value, "close")) {
+                    break;
+                }
+            }
+
+            // if the handler function requests to close the connection
+            if (response.headers.contains("Connection")) {
+                if (std.ascii.eqlIgnoreCase(response.headers.getValue("Connection").?, "close")) {
                     break;
                 }
             }
