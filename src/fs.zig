@@ -34,6 +34,17 @@ pub fn serve(response: *Response, request: Request) !void {
     };
     defer file.close();
 
+    try serveFile(response, request, file, alloc);
+}
+
+/// Serves a file to the client
+/// Opening and closing of the file must be handled by the user
+pub fn serveFile(
+    response: *Response,
+    request: Request,
+    file: fs.File,
+    allocator: *Allocator,
+) !void {
     var stat = try file.stat();
     if (stat.kind != .File) {
         return response.notFound();
