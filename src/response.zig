@@ -169,7 +169,7 @@ pub const Response = struct {
 
         // write status line
         const status_code_string = self.status_code.toString();
-        try stream.print("HTTP/1.1 {} {}\r\n", .{ self.status_code, status_code_string });
+        try stream.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(self.status_code), status_code_string });
 
         // write headers
         var it = self.headers.iterator();
