@@ -5,9 +5,9 @@ const Allocator = std.mem.Allocator;
 /// HTTP Status codes according to `rfc7231`
 /// https://tools.ietf.org/html/rfc7231#section-6
 const StatusCode = enum(u16) {
-    /// Informational 1xx
+    // Informational 1xx
     Continue = 100,
-    /// Successful 2xx
+    // Successful 2xx
     SwitchingProtocols = 101,
     Ok = 200,
     Created = 201,
@@ -15,7 +15,7 @@ const StatusCode = enum(u16) {
     NonAuthoritativeInformation = 203,
     NoContent = 204,
     ResetContent = 205,
-    /// Redirections 3xx
+    // Redirections 3xx
     PartialContent = 206,
     MultipleChoices = 300,
     MovedPermanently = 301,
@@ -24,7 +24,7 @@ const StatusCode = enum(u16) {
     NotModified = 304,
     UseProxy = 305,
     TemporaryRedirect = 307,
-    /// Client errors 4xx
+    // Client errors 4xx
     BadRequest = 400,
     /// reserved status code for future use
     Unauthorized = 401,
@@ -49,7 +49,7 @@ const StatusCode = enum(u16) {
     UpgradeRequired = 426,
     /// Extra Status Code according to `https://tools.ietf.org/html/rfc6585#section-5`
     RequestHeaderFieldsTooLarge = 431,
-    /// server errors 5xx
+    // server errors 5xx
     InternalServerError = 500,
     NotImplemented = 501,
     BadGateway = 502,
@@ -58,7 +58,8 @@ const StatusCode = enum(u16) {
     HttpVersionNotSupported = 505,
 
     /// Returns the string value of a `StatusCode`
-    fn string(self: @This()) []const u8 {
+    /// for example: .ResetContent returns "Returns Content".
+    fn toString(self: @This()) []const u8 {
         return switch (self) {
             .Continue => "Continue",
             .SwitchingProtocols => "Switching Protocols",
@@ -116,11 +117,12 @@ pub const Headers = std.StringHashMap([]const u8);
 pub const SocketWriter = struct {
     handle: std.os.fd_t,
 
-    /// Use os' SendError
+    /// Alias for `std.os.SendError`
+    /// Required constant for `std.io.BufferedWriter`
     pub const Error = std.os.SendError;
 
     /// Uses fmt to format the given bytes and writes to the socket
-    pub fn print(self: SockerWriter, comptime format: []const u8, args: var) Error!usize {
+    pub fn print(self: SockerWriter, comptime format: []const u8, args: anytype) Error!usize {
         return std.fmt.format(self, format, args);
     }
 
@@ -141,8 +143,10 @@ pub const SocketWriter = struct {
 
 /// Response allows to set the status code and content of the response
 pub const Response = struct {
+    const Self = @This();
+
     /// status code of the response, 200 by default
-    status_code: u16 = 200,
+    status_code: StatusCode = .Ok,
     /// StringHashMap([]const u8) with key and value of headers
     headers: Headers,
     /// Buffered writer that writes to our socket
@@ -159,12 +163,12 @@ pub const Response = struct {
     }
 
     /// Writes HTTP Response to the peer
-    pub fn write(self: *@This(), contents: []const u8) !void {
+    pub fn write(self: *Self, contents: []const u8) !void {
         self.is_dirty = true;
         var stream = self.writer.outStream();
 
         // write status line
-        const status_code_string = @intToEnum(StatusCode, self.status_code).string();
+        const status_code_string = self.status_code.toString();
         try stream.print("HTTP/1.1 {} {}\r\n", .{ self.status_code, status_code_string });
 
         // write headers
@@ -189,13 +193,35 @@ pub const Response = struct {
         try self.writer.flush();
     }
 
-    pub fn notFound(self: *@This()) !void {
-        self.status_code = 404;
+    /// Sends a status code with an empty body and the current headers to the client
+    pub fn writeHeader(self: *Self, status_code: StatusCode) !void {
+        self.is_dirty = true;
+        var stream = self.writer.outStream();
+
+        try stream.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(status_code), status_code.toString() });
+        // write headers
+        var it = self.headers.iterator();
+        while (it.next()) |header| {
+            try stream.print("{}: {}\r\n", .{ header.key, header.value });
+        }
+
+        if (!std.io.is_async) {
+            try stream.writeAll("Connection: Close\r\n");
+        }
+
+        // Carrot Return after headers to tell clients where headers end, and body starts
+        try stream.writeAll("\r\n");
+
+        try self.writer.flush();
+    }
+
+    pub fn notFound(self: *Self) !void {
+        self.status_code = .NotFound;
         try self.write("Resource not found\n");
     }
 
     /// frees memory of `headers`
-    pub fn deinit(self: @This()) void {
+    pub fn deinit(self: Self) void {
         self.headers.deinit();
     }
 };

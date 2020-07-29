@@ -155,8 +155,7 @@ fn serveRequest(
                 connection.frame_stack,
                 {},
                 connection.server.request_handler,
-                &response,
-                parsed_request,
+                .{ &response, parsed_request },
             );
 
             await frame catch |err| {
@@ -190,14 +189,14 @@ fn serveRequest(
 
             // if the handler function requests to close the connection
             if (response.headers.contains("Connection")) {
-                if (std.ascii.eqlIgnoreCase(response.headers.getValue("Connection").?, "close")) {
+                if (std.ascii.eqlIgnoreCase(response.headers.get("Connection").?, "close")) {
                     break;
                 }
             }
         } else |err| {
             _ = try response.headers.put("Content-Type", "text/plain;charset=utf-8");
 
-            response.status_code = 400;
+            response.status_code = .BadRequest;
             try response.write("400 Bad Request");
             break;
         }

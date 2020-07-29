@@ -39,7 +39,7 @@ pub const Request = struct {
 /// bigger than this size will be skipped.
 pub fn parse(
     allocator: *std.mem.Allocator,
-    stream: var,
+    stream: anytype,
     buffer_size: usize,
 ) !Request {
     const State = enum {

@@ -28,32 +28,50 @@ pub fn deinit() void {
 /// Servers a file based on the path of the request
 pub fn serve(response: *Response, request: Request) !void {
     std.debug.assert(initialized);
+    const index = "index.html";
+
+    if (std.mem.endsWith(u8, request.url.path, index)) {
+        return localRedirect(response, request, "./", alloc);
+    }
 
     var file = dir.openFile(request.url.path[1..], .{}) catch {
         return response.notFound();
     };
     defer file.close();
 
-    try serveFile(response, request, file, alloc);
+    try serveFile(response, request.url.path, file, alloc);
+}
+
+/// Notifies the client with a Moved Permanently header
+/// The memory allocated by this is freed
+fn localRedirect(response: *Response, request: Request, path: []const u8, allocator: *Allocator) !void {
+    const new_path = try std.mem.concat(allocator, u8, &[_][]const u8{
+        path,
+        request.url.raw_query,
+    });
+    defer allocator.free(new_path);
+
+    _ = try response.headers.put("Location", new_path);
+    try response.writeHeader(.MovedPermanently);
 }
 
 /// Serves a file to the client
 /// Opening and closing of the file must be handled by the user
 pub fn serveFile(
     response: *Response,
-    request: Request,
+    file_name: []const u8,
     file: fs.File,
     allocator: *Allocator,
 ) !void {
     var stat = try file.stat();
     if (stat.kind != .File) {
-        return response.notFound();
+        return error.NotAFile;
     }
 
     // read contents and write to response
     const buffer = try file.readAllAlloc(alloc, stat.size, stat.size);
     defer alloc.free(buffer);
 
-    _ = try response.headers.put("Content-Type", MimeType.fromFileName(request.url.path).toType());
+    _ = try response.headers.put("Content-Type", MimeType.fromFileName(file_name).toType());
     try response.write(buffer);
 }
