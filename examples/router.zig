@@ -1,11 +1,23 @@
 const std = @import("std");
 const http = @import("apple_pie");
+const fs = http.FileServer;
+
+pub const io_mode = .evented;
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = &gpa.allocator;
+
+    try fs.init(allocator, .{ .dir_path = "src", .base_path = "fs" });
     try http.server.listenAndServe(
-        std.heap.page_allocator,
+        allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),
         comptime MiniRouter(&[_]Route{
+            .{
+                .path = "/fs",
+                .serveFn = fs.serve,
+            },
             .{
                 .path = "/",
                 .serveFn = index,
@@ -28,7 +40,7 @@ fn MiniRouter(comptime routes: []const Route) http.server.RequestHandler {
     return struct {
         fn serve(response: *http.Response, request: http.Request) callconv(.Async) !void {
             inline for (routes) |route| {
-                if (std.mem.eql(u8, request.url.path, route.path)) {
+                if (std.mem.startsWith(u8, request.url.path, route.path)) {
                     return route.serveFn(response, request);
                 }
             }

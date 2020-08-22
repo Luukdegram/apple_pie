@@ -5,19 +5,28 @@ const MimeType = @import("mime_type.zig").MimeType;
 const Allocator = std.mem.Allocator;
 const fs = std.fs;
 
+pub const FileServer = @This();
+
 var dir: fs.Dir = undefined;
 var alloc: *std.mem.Allocator = undefined;
 var initialized: bool = false;
+var base_path: ?[]const u8 = null;
+
+pub const Config = struct {
+    dir_path: []const u8,
+    base_path: ?[]const u8 = null,
+};
 
 /// Sets the directory of the file server to the given path
 /// Note that this function must be called before passing the serve
 /// function to the `Server`.
 ///
 /// deinit() must be called to close the dir handler
-pub fn init(path: []const u8, allocator: *Allocator) !void {
-    dir = try fs.cwd().openDir(path, .{});
+pub fn init(allocator: *Allocator, config: Config) !void {
+    dir = try fs.cwd().openDir(config.dir_path, .{});
     alloc = allocator;
     initialized = true;
+    base_path = config.base_path;
 }
 
 /// Closes the dir handler
@@ -29,12 +38,20 @@ pub fn deinit() void {
 pub fn serve(response: *Response, request: Request) !void {
     std.debug.assert(initialized);
     const index = "index.html";
+    var path = request.url.path[1..];
 
-    if (std.mem.endsWith(u8, request.url.path, index)) {
+    if (std.mem.endsWith(u8, path, index)) {
         return localRedirect(response, request, "./", alloc);
     }
 
-    var file = dir.openFile(request.url.path[1..], .{}) catch {
+    if (base_path) |b_path| {
+        if (std.mem.startsWith(u8, path, b_path)) {
+            path = path[b_path.len..];
+            if (path.len > 0 and path[0] == '/') path = path[1..];
+        }
+    }
+
+    var file = dir.openFile(path, .{}) catch |_| {
         return response.notFound();
     };
     defer file.close();
@@ -69,8 +86,8 @@ pub fn serveFile(
     }
 
     // read contents and write to response
-    const buffer = try file.readAllAlloc(alloc, stat.size, stat.size);
-    defer alloc.free(buffer);
+    const buffer = try file.readAllAlloc(allocator, stat.size, stat.size);
+    defer allocator.free(buffer);
 
     _ = try response.headers.put("Content-Type", MimeType.fromFileName(file_name).toType());
     try response.write(buffer);

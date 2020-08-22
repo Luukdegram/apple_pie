@@ -165,7 +165,7 @@ pub const Response = struct {
     /// Writes HTTP Response to the peer
     pub fn write(self: *Self, contents: []const u8) !void {
         self.is_dirty = true;
-        var stream = self.writer.outStream();
+        var stream = self.writer.writer();
 
         // write status line
         const status_code_string = self.status_code.toString();
@@ -196,7 +196,7 @@ pub const Response = struct {
     /// Sends a status code with an empty body and the current headers to the client
     pub fn writeHeader(self: *Self, status_code: StatusCode) !void {
         self.is_dirty = true;
-        var stream = self.writer.outStream();
+        var stream = self.writer.writer();
 
         try stream.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(status_code), status_code.toString() });
         // write headers

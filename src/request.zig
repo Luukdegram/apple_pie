@@ -149,7 +149,7 @@ test "Basic request parse" {
         "\r\n" ++
         "some body";
 
-    const stream = std.io.fixedBufferStream(contents).inStream();
+    const stream = std.io.fixedBufferStream(contents).reader();
     var request = try parse(allocator, stream, 4096);
     defer request.deinit();
 

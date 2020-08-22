@@ -146,7 +146,7 @@ fn serveRequest(
         // parse the HTTP Request and if successful, call the handler function asynchronous
         var request = req.parse(
             &arena.allocator,
-            connection.conn.file.inStream(),
+            connection.conn.file.reader(),
             connection.server.request_buffer_size,
         );
 
