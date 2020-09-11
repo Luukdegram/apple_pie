@@ -215,6 +215,17 @@ pub const Response = struct {
         try self.writer.flush();
     }
 
+    /// sends a file as a response, this uses the internal `std.os.sendFile`.
+    /// It's up to the user to correctly set the headers.
+    pub fn sendFile(self: *Self, in: std.fs.File) !void {
+        const out = self.writer.unbuffered_writer.handle;
+        const len = try in.getEndPos();
+        var remaining: u64 = len;
+        while (remaining > 0) {
+            remaining -= try std.os.sendfile(out, in.handle, len - remaining, remaining, &[_]std.os.iovec_const{}, &[_]std.os.iovec_const{}, 0);
+        }
+    }
+
     pub fn notFound(self: *Self) !void {
         self.status_code = .NotFound;
         try self.write("Resource not found\n");

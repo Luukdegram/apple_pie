@@ -10,6 +10,8 @@ pub fn main() !void {
     const allocator = &gpa.allocator;
 
     try fs.init(allocator, .{ .dir_path = "src", .base_path = "fs" });
+    ds.deinit();
+
     try http.server.listenAndServe(
         allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),

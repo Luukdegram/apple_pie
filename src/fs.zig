@@ -86,9 +86,11 @@ pub fn serveFile(
     }
 
     // read contents and write to response
-    const buffer = try file.readAllAlloc(allocator, stat.size, stat.size);
-    defer allocator.free(buffer);
+    // const buffer = try allocator.alloc(u8, stat.size);
+    // _ = try file.readAll(buffer);
+    // defer allocator.free(buffer);
 
     _ = try response.headers.put("Content-Type", MimeType.fromFileName(file_name).toType());
-    try response.write(buffer);
+    try response.sendFile(file);
+    //try response.write(buffer);
 }
