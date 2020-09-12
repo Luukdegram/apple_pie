@@ -165,51 +165,51 @@ pub const Response = struct {
     /// Writes HTTP Response to the peer
     pub fn write(self: *Self, contents: []const u8) SocketWriter.Error!void {
         self.is_dirty = true;
-        var stream = self.writer.writer();
+        var writer = self.writer.writer();
 
         // write status line
         const status_code_string = self.status_code.toString();
-        try stream.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(self.status_code), status_code_string });
+        try writer.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(self.status_code), status_code_string });
 
         // write headers
         for (self.headers.items()) |header| {
-            try stream.print("{}: {}\r\n", .{ header.key, header.value });
+            try writer.print("{}: {}\r\n", .{ header.key, header.value });
         }
 
         // Unless specified by the user, write content length
         if (!self.headers.contains("Content-Length")) {
-            try stream.print("Content-Length: {}\r\n", .{contents.len});
+            try writer.print("Content-Length: {}\r\n", .{contents.len});
         }
 
         if (!std.io.is_async) {
-            try stream.writeAll("Connection: Close\r\n");
+            try writer.writeAll("Connection: Close\r\n");
         }
 
         // Carrot Return after headers to tell clients where headers end, and body starts
-        try stream.writeAll("\r\n");
+        try writer.writeAll("\r\n");
 
-        try stream.writeAll(contents);
+        try writer.writeAll(contents);
         try self.writer.flush();
     }
 
     /// Sends a status code with an empty body and the current headers to the client
     pub fn writeHeader(self: *Self, status_code: StatusCode) SocketWriter.Error!void {
         self.is_dirty = true;
-        var stream = self.writer.writer();
+        var writer = self.writer.writer();
 
-        try stream.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(status_code), status_code.toString() });
+        try writer.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(status_code), status_code.toString() });
         // write headers
         var it = self.headers.iterator();
         while (it.next()) |header| {
-            try stream.print("{}: {}\r\n", .{ header.key, header.value });
+            try writer.print("{}: {}\r\n", .{ header.key, header.value });
         }
 
         if (!std.io.is_async) {
-            try stream.writeAll("Connection: Close\r\n");
+            try writer.writeAll("Connection: Close\r\n");
         }
 
         // Carrot Return after headers to tell clients where headers end, and body starts
-        try stream.writeAll("\r\n");
+        try writer.writeAll("\r\n");
 
         try self.writer.flush();
     }

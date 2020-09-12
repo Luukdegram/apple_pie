@@ -5,6 +5,9 @@ const Allocator = std.mem.Allocator;
 /// QueryParameters is an alias for a String HashMap
 pub const QueryParameters = std.StringHashMap([]const u8);
 
+/// Possible errors when parsing query parameters
+const QueryError = error{ MalformedUrl, OutOfMemory, InvalidCharacter };
+
 pub const Url = struct {
     path: []const u8,
     raw_path: []const u8,
@@ -32,7 +35,7 @@ pub const Url = struct {
     /// Builds query parameters from url's `raw_query`
     /// Memory is owned by caller
     /// Note: For now, each key/value pair needs to be freed manually
-    pub fn queryParameters(self: @This(), allocator: *Allocator) !QueryParameters {
+    pub fn queryParameters(self: @This(), allocator: *Allocator) QueryError!QueryParameters {
         var queries = QueryParameters.init(allocator);
         errdefer queries.deinit();
 
@@ -57,9 +60,11 @@ pub const Url = struct {
             }
 
             key = try unescape(allocator, key);
+            errdefer allocator.free(key);
             value = try unescape(allocator, value);
+            errdefer allocator.free(value);
 
-            _ = try queries.put(key, value);
+            try queries.put(key, value);
         }
 
         return queries;
@@ -68,7 +73,7 @@ pub const Url = struct {
 
 /// Unescapes the given string literal by decoding the %hex number into ascii
 /// memory is owned & freed by caller
-fn unescape(allocator: *Allocator, value: []const u8) ![]const u8 {
+fn unescape(allocator: *Allocator, value: []const u8) QueryError![]const u8 {
     var perc_counter: usize = 0;
     var has_plus: bool = false;
 
@@ -79,7 +84,7 @@ fn unescape(allocator: *Allocator, value: []const u8) ![]const u8 {
             '%' => {
                 perc_counter += 1;
                 if (i + 2 > value.len or !isHex(value[i + 1]) or !isHex(value[i + 2])) {
-                    return error.MalformedUrl;
+                    return QueryError.MalformedUrl;
                 }
                 i += 2;
             },
@@ -112,7 +117,9 @@ fn unescape(allocator: *Allocator, value: []const u8) ![]const u8 {
 }
 
 /// Escapes a string by encoding symbols so it can be safely used inside an URL
-fn escape(value: []const u8) []const u8 {}
+fn escape(value: []const u8) []const u8 {
+    @compileError("TODO: Implement escape()");
+}
 
 /// Returns true if the given byte is heximal
 fn isHex(c: u8) bool {
@@ -124,17 +131,17 @@ fn isHex(c: u8) bool {
 
 test "Basic raw query" {
     const path = "/example?name=value";
-    const url: Url = try Url.init(path);
+    const url: Url = Url.init(path);
 
     testing.expectEqualSlices(u8, "?name=value", url.raw_query);
 }
 
 test "Retrieve query parameters" {
     const path = "/example?name=value";
-    const url: Url = try Url.init(path);
+    const url: Url = Url.init(path);
 
-    const query_params = try url.queryParameters(testing.allocator);
+    var query_params = try url.queryParameters(testing.allocator);
     defer query_params.deinit();
     testing.expect(query_params.contains("name"));
-    testing.expectEqualSlices(u8, "value", query_params.getValue("name") orelse " ");
+    testing.expectEqualStrings("value", query_params.get("name") orelse " ");
 }

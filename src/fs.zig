@@ -68,7 +68,7 @@ fn localRedirect(response: *Response, request: Request, path: []const u8, alloca
     });
     defer allocator.free(new_path);
 
-    _ = try response.headers.put("Location", new_path);
+    try response.headers.put("Location", new_path);
     try response.writeHeader(.MovedPermanently);
 }
 

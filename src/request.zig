@@ -21,9 +21,8 @@ pub const Request = struct {
 
     /// Frees all memory of a Response, as this loops through each header to remove its memory
     /// you may consider using an arena allocator to free all memory at once for better perf
-    pub fn deinit(self: @This()) void {
+    pub fn deinit(self: *Request) void {
         self.headers.deinit();
-        self.allocator.free(self.method);
         if (self.allocated_body) {
             self.allocator.free(self.body);
         }
@@ -61,14 +60,14 @@ pub fn parse(
     buffer_size: usize,
 ) (ParseError || @TypeOf(reader).Error)!Request {
     const State = enum {
-        Method,
-        Url,
-        Protocol,
-        Header,
-        Body,
+        method,
+        url,
+        protocol,
+        header,
+        body,
     };
 
-    var state: State = .Method;
+    var state: State = .method;
 
     var request: Request = .{
         .body = "",
@@ -89,43 +88,43 @@ pub fn parse(
     var buffer = try allocator.alloc(u8, buffer_size);
 
     const read = try reader.read(buffer);
-    buffer = buffer[0..read];
+    buffer = try allocator.resize(buffer, read);
 
     var i: usize = 0;
     while (i < read) {
         switch (state) {
-            .Method => {
+            .method => {
                 if (std.mem.indexOf(u8, buffer[i..], " ")) |index| {
                     request.method = buffer[i .. i + index];
                     i += request.method.len + 1;
-                    state = .Url;
+                    state = .url;
                 } else {
                     return ParseError.InvalidMethod;
                 }
             },
-            .Url => {
+            .url => {
                 if (std.mem.indexOf(u8, buffer[i..], " ")) |index| {
                     request.url = Url.init(buffer[i .. i + index]);
                     i += request.url.raw_path.len + 1;
-                    state = .Protocol;
+                    state = .protocol;
                 } else {
                     return ParseError.InvalidUrl;
                 }
             },
-            .Protocol => {
+            .protocol => {
                 if (std.mem.indexOf(u8, buffer[i..], "\r\n")) |index| {
                     if (index > 8) return ParseError.InvalidProtocol;
                     request.protocol = buffer[i .. i + index];
                     i += request.protocol.len + 2; // skip \r\n
-                    state = .Header;
+                    state = .header;
                 } else {
                     return ParseError.InvalidProtocol;
                 }
             },
-            .Header => {
+            .header => {
                 if (buffer[i] == '\r') {
                     if (!request.headers.contains("Content-Length")) break;
-                    state = .Body;
+                    state = .body;
                     i += 2; //Skip the \r\n
                     continue;
                 }
@@ -138,7 +137,7 @@ pub fn parse(
                 i += value.len + 2; //skip \r\n
                 try request.headers.append(key, value, null);
             },
-            .Body => {
+            .body => {
                 const entries = (try request.headers.get(allocator, "Content-Length")).?;
                 defer allocator.free(entries);
                 const length = try std.fmt.parseInt(usize, entries[0].value, 10);

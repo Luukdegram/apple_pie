@@ -31,7 +31,12 @@ pub const Server = struct {
             var connection = try server.allocator.create(Connection);
             errdefer server.allocator.destroy(connection);
 
-            var stack = try server.allocator.alignedAlloc(u8, 16, @frameSize(server.request_handler));
+            const stack = try server.allocator.allocAdvanced(
+                u8,
+                16,
+                @frameSize(server.request_handler),
+                .exact,
+            );
 
             connection.* = .{
                 .frame_stack = stack,
@@ -194,7 +199,7 @@ fn serveRequest(
                 }
             }
         } else |err| {
-            _ = try response.headers.put("Content-Type", "text/plain;charset=utf-8");
+            try response.headers.put("Content-Type", "text/plain;charset=utf-8");
 
             response.status_code = .BadRequest;
             try response.write("400 Bad Request");
