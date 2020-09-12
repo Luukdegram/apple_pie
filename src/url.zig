@@ -11,7 +11,7 @@ pub const Url = struct {
     raw_query: []const u8,
 
     /// Builds a new URL from a given path
-    pub fn init(path: []const u8) !Url {
+    pub fn init(path: []const u8) Url {
         const query = blk: {
             var raw_query: []const u8 = undefined;
             if (std.mem.indexOf(u8, path, "?")) |index| {

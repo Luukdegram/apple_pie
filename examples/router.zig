@@ -10,7 +10,7 @@ pub fn main() !void {
     const allocator = &gpa.allocator;
 
     try fs.init(allocator, .{ .dir_path = "src", .base_path = "fs" });
-    ds.deinit();
+    defer fs.deinit();
 
     try http.server.listenAndServe(
         allocator,

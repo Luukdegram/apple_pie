@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 
 /// HTTP Status codes according to `rfc7231`
 /// https://tools.ietf.org/html/rfc7231#section-6
-const StatusCode = enum(u16) {
+pub const StatusCode = enum(u16) {
     // Informational 1xx
     Continue = 100,
     // Successful 2xx
@@ -59,7 +59,7 @@ const StatusCode = enum(u16) {
 
     /// Returns the string value of a `StatusCode`
     /// for example: .ResetContent returns "Returns Content".
-    fn toString(self: @This()) []const u8 {
+    pub fn toString(self: StatusCode) []const u8 {
         return switch (self) {
             .Continue => "Continue",
             .SwitchingProtocols => "Switching Protocols",
@@ -109,7 +109,7 @@ const StatusCode = enum(u16) {
 };
 
 /// Headers is an alias to `std.StringHashMap([]const u8)`
-pub const Headers = std.StringHashMap([]const u8);
+pub const Headers = std.StringArrayHashMap([]const u8);
 
 /// SocketWriter writes to a socket and sets the
 /// MSG_NOSIGNAL flag to ignore BrokenPipe signals
@@ -163,7 +163,7 @@ pub const Response = struct {
     }
 
     /// Writes HTTP Response to the peer
-    pub fn write(self: *Self, contents: []const u8) !void {
+    pub fn write(self: *Self, contents: []const u8) SocketWriter.Error!void {
         self.is_dirty = true;
         var stream = self.writer.writer();
 
@@ -172,8 +172,7 @@ pub const Response = struct {
         try stream.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(self.status_code), status_code_string });
 
         // write headers
-        var it = self.headers.iterator();
-        while (it.next()) |header| {
+        for (self.headers.items()) |header| {
             try stream.print("{}: {}\r\n", .{ header.key, header.value });
         }
 
@@ -194,7 +193,7 @@ pub const Response = struct {
     }
 
     /// Sends a status code with an empty body and the current headers to the client
-    pub fn writeHeader(self: *Self, status_code: StatusCode) !void {
+    pub fn writeHeader(self: *Self, status_code: StatusCode) SocketWriter.Error!void {
         self.is_dirty = true;
         var stream = self.writer.writer();
 
@@ -215,18 +214,7 @@ pub const Response = struct {
         try self.writer.flush();
     }
 
-    /// sends a file as a response, this uses the internal `std.os.sendFile`.
-    /// It's up to the user to correctly set the headers.
-    pub fn sendFile(self: *Self, in: std.fs.File) !void {
-        const out = self.writer.unbuffered_writer.handle;
-        const len = try in.getEndPos();
-        var remaining: u64 = len;
-        while (remaining > 0) {
-            remaining -= try std.os.sendfile(out, in.handle, len - remaining, remaining, &[_]std.os.iovec_const{}, &[_]std.os.iovec_const{}, 0);
-        }
-    }
-
-    pub fn notFound(self: *Self) !void {
+    pub fn notFound(self: *Self) SocketWriter.Error!void {
         self.status_code = .NotFound;
         try self.write("Resource not found\n");
     }

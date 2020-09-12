@@ -56,7 +56,7 @@ pub fn serve(response: *Response, request: Request) !void {
     };
     defer file.close();
 
-    try serveFile(response, request.url.path, file, alloc);
+    try serveFile(response, request.url.path, file);
 }
 
 /// Notifies the client with a Moved Permanently header
@@ -74,23 +74,46 @@ fn localRedirect(response: *Response, request: Request, path: []const u8, alloca
 
 /// Serves a file to the client
 /// Opening and closing of the file must be handled by the user
+///
+/// NOTE: This is a low level implementation utilizing std.os.sendFile()
+/// and accesses the response writer's internal socket handle. This does not allow for setting
+/// any other headers and/or status codes. Use response.write() for that
 pub fn serveFile(
     response: *Response,
     file_name: []const u8,
     file: fs.File,
-    allocator: *Allocator,
 ) !void {
     var stat = try file.stat();
     if (stat.kind != .File) {
         return error.NotAFile;
     }
 
-    // read contents and write to response
-    // const buffer = try allocator.alloc(u8, stat.size);
-    // _ = try file.readAll(buffer);
-    // defer allocator.free(buffer);
+    response.is_dirty = true;
+    var stream = response.writer.writer();
+    const len = stat.size;
 
-    _ = try response.headers.put("Content-Type", MimeType.fromFileName(file_name).toType());
-    try response.sendFile(file);
-    //try response.write(buffer);
+    // write status line
+    try stream.writeAll("HTTP/1.1 200 OK\r\n");
+
+    //write headers
+    for (response.headers.items()) |header| {
+        try stream.print("{}: {}\r\n", .{ header.key, header.value });
+    }
+
+    try stream.print("Content-Length: {}\r\n", .{len});
+    try stream.print("Content-Type: {}\r\n", .{MimeType.fromFileName(file_name).toType()});
+
+    if (!std.io.is_async) {
+        try stream.writeAll("Connection: Close\r\n");
+    }
+
+    //Carrot Return after headers to tell clients where headers end, and body starts
+    try stream.writeAll("\r\n");
+    try response.writer.flush();
+
+    const out = response.writer.unbuffered_writer.handle;
+    var remaining: u64 = len;
+    while (remaining > 0) {
+        remaining -= try std.os.sendfile(out, file.handle, len - remaining, remaining, &[_]std.os.iovec_const{}, &[_]std.os.iovec_const{}, 0);
+    }
 }
