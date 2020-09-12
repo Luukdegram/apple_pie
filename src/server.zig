@@ -7,26 +7,42 @@ const Allocator = std.mem.Allocator;
 pub const Request = req.Request;
 pub const Response = resp.Response;
 
+const log = std.log.scoped(.server);
+
+/// Function signature of what the handler function must match
 pub const RequestHandler = fn handle(*Response, Request) callconv(.Async) anyerror!void;
 
 pub const Server = struct {
-    const Self = @This();
-
+    /// The connection clients will connect to
     host_connection: net.StreamServer,
+    /// The buffer size we accept for requests, anything bigger than this
+    /// will be manually allocated
     request_buffer_size: usize = 4096,
+    /// whether the server should stop running
     should_stop: std.atomic.Int(u1),
+    /// The address the server can be reached on
     address: net.Address,
+    /// The function pointer to handle the requests
     request_handler: RequestHandler,
+
     allocator: *Allocator,
+    /// Connections ready to be cleaned up
     resolved: std.atomic.Stack(*Connection),
 
     const Connection = struct {
+        /// Stack size of the async function
         frame_stack: []align(16) u8,
+        /// The server we're connected to
         server: *Server,
+        /// The actual connection
         conn: net.StreamServer.Connection,
+        /// Frame pointer to the request handler
         frame: @Frame(serveRequest),
+        /// Allows us to cleanup the connection when finished
         node: std.atomic.Stack(*Connection).Node,
 
+        /// Creates a new connection with a stack big enough to call the request handler
+        /// This allocates the `Connection` on the heap
         fn init(server: *Server, conn: net.StreamServer.Connection) !*Connection {
             var connection = try server.allocator.create(Connection);
             errdefer server.allocator.destroy(connection);
@@ -52,6 +68,11 @@ pub const Server = struct {
             return connection;
         }
 
+        /// Cleans up the connection by closing the connection
+        /// and then freeing the memory of the frame stack
+        ///
+        /// NOTE: This will not free the Connection itself yet,
+        /// that will be done by the server.
         fn deinit(self: *Connection) void {
             self.conn.file.close();
             self.server.allocator.free(self.frame_stack);
@@ -101,21 +122,23 @@ pub const Server = struct {
         while (true) {
             var connection = server.accept() catch |err| {
                 if (retries > 4) return err;
-                std.debug.warn("Could not accept connection: {}\nRetrying...\n", .{err});
+                log.warn("Could not accept connection: {}\nRetrying...\n", .{err});
 
-                // sleep for 5 ms extra per retry
-                std.time.sleep(5000000 * (retries + 1));
+                // sleep for 100 ms extra per retry
+                std.time.sleep(std.time.ns_per_ms * 100 * (retries + 1));
                 retries += 1;
                 continue;
             };
 
-            var conn = Connection.init(self, connection) catch {
+            var conn = Connection.init(self, connection) catch |err| {
+                log.info("Could not create connection: {}\nClosing and continueing...\n", .{err});
                 connection.file.close();
                 continue;
             };
 
             conn.frame = async serveRequest(conn);
 
+            // if any connections are resolved(finished) clean them up
             while (self.resolved.pop()) |node| {
                 node.data.deinit();
                 self.allocator.destroy(node.data);
@@ -139,13 +162,18 @@ pub fn listenAndServe(
 fn serveRequest(
     connection: *Server.Connection,
 ) !void {
+    // Add connection to resolved stack when we are finished with the request
     defer connection.server.resolved.push(&connection.node);
-    // keep-alive
+
+    // keep-alive by default, we will break out if Connection: close is set
+    // or if `io_mode` is not set to '.evented'
     while (true) {
         // use an arena allocator to free all memory at once as it performs better than
         // freeing everything individually.
         var arena = std.heap.ArenaAllocator.init(connection.server.allocator);
         defer arena.deinit();
+
+        // 'var' as we allocate it on the stack of the loop and we need to modify it
         var response = Response.init(connection.conn.file.handle, &arena.allocator);
 
         // parse the HTTP Request and if successful, call the handler function asynchronous
@@ -167,7 +195,7 @@ fn serveRequest(
                 switch (err) {
                     std.os.SendError.BrokenPipe => break,
                     else => {
-                        std.debug.print("Unexpected error: {}\n", .{err});
+                        log.err("Unexpected error: {}\n", .{err});
                         break;
                     },
                 }
@@ -203,6 +231,7 @@ fn serveRequest(
 
             response.status_code = .BadRequest;
             try response.write("400 Bad Request");
+            log.debug("An error occured parsing the request: {}\n", .{err});
             break;
         }
     }
