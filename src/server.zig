@@ -161,7 +161,7 @@ pub fn listenAndServe(
 /// Handles a request and returns a response based on the given handler function
 fn serveRequest(
     connection: *Server.Connection,
-) !void {
+) (Response.Error || req.ParseError)!void {
     // Add connection to resolved stack when we are finished with the request
     defer connection.server.resolved.push(&connection.node);
 

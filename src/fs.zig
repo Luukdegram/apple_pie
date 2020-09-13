@@ -22,7 +22,7 @@ pub const Config = struct {
 /// function to the `Server`.
 ///
 /// deinit() must be called to close the dir handler
-pub fn init(allocator: *Allocator, config: Config) !void {
+pub fn init(allocator: *Allocator, config: Config) fs.Dir.OpenError!void {
     dir = try fs.cwd().openDir(config.dir_path, .{});
     alloc = allocator;
     initialized = true;
@@ -35,7 +35,7 @@ pub fn deinit() void {
 }
 
 /// Servers a file based on the path of the request
-pub fn serve(response: *Response, request: Request) !void {
+pub fn serve(response: *Response, request: Request) (Response.Error || error{NotAFile} || std.os.SendFileError)!void {
     std.debug.assert(initialized);
     const index = "index.html";
     var path = request.url.path[1..];
@@ -61,7 +61,12 @@ pub fn serve(response: *Response, request: Request) !void {
 
 /// Notifies the client with a Moved Permanently header
 /// The memory allocated by this is freed
-fn localRedirect(response: *Response, request: Request, path: []const u8, allocator: *Allocator) !void {
+fn localRedirect(
+    response: *Response,
+    request: Request,
+    path: []const u8,
+    allocator: *Allocator,
+) (Response.Error)!void {
     const new_path = try std.mem.concat(allocator, u8, &[_][]const u8{
         path,
         request.url.raw_query,
@@ -82,11 +87,10 @@ pub fn serveFile(
     response: *Response,
     file_name: []const u8,
     file: fs.File,
-) !void {
+) (Response.Error || error{NotAFile} || std.os.SendFileError)!void {
     var stat = try file.stat();
-    if (stat.kind != .File) {
+    if (stat.kind != .File)
         return error.NotAFile;
-    }
 
     response.is_flushed = true;
     var stream = response.socket_writer.writer();
