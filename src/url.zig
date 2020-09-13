@@ -35,7 +35,7 @@ pub const Url = struct {
     /// Builds query parameters from url's `raw_query`
     /// Memory is owned by caller
     /// Note: For now, each key/value pair needs to be freed manually
-    pub fn queryParameters(self: @This(), allocator: *Allocator) QueryError!QueryParameters {
+    pub fn queryParameters(self: Url, allocator: *Allocator) QueryError!QueryParameters {
         var queries = QueryParameters.init(allocator);
         errdefer queries.deinit();
 

@@ -10,7 +10,7 @@ fn countCaptures(buffer: []const u8) usize {
 }
 
 /// Creates a new Template engine based on the given input
-fn Template(comptime fmt: []const u8) type {
+pub fn Template(comptime fmt: []const u8) type {
     comptime const num_captures = countCaptures(fmt);
     comptime var captures: [num_captures][]const u8 = undefined;
 

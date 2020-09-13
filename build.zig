@@ -20,13 +20,15 @@ pub fn build(b: *Builder) void {
         var file: []const u8 = undefined;
         file = "examples/basic.zig";
 
-        if (std.mem.eql(u8, opt, "router")) {
+        if (std.mem.eql(u8, opt, "router"))
             file = "examples/router.zig";
-        }
 
-        if (std.mem.eql(u8, opt, "static")) {
+        if (std.mem.eql(u8, opt, "static"))
             file = "examples/static.zig";
-        }
+
+        if (std.mem.eql(u8, opt, "template"))
+            file = "examples/template.zig";
+
         break :blk file;
     };
 
