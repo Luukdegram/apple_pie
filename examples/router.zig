@@ -31,7 +31,7 @@ pub fn main() !void {
 /// Very basic text-based response, it's up to implementation to set
 /// the correct content type of the message
 fn index(response: *http.Response, request: http.Request) !void {
-    try response.write("Hello Zig!");
+    try response.writer().writeAll("Hello Zig!");
 }
 
 /// A very basic router that only checks for exact matches of a path

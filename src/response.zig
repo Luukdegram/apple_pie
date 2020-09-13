@@ -143,84 +143,72 @@ pub const SocketWriter = struct {
 
 /// Response allows to set the status code and content of the response
 pub const Response = struct {
-    const Self = @This();
-
     /// status code of the response, 200 by default
     status_code: StatusCode = .Ok,
     /// StringHashMap([]const u8) with key and value of headers
     headers: Headers,
     /// Buffered writer that writes to our socket
-    writer: std.io.BufferedWriter(4096, SocketWriter),
+    socket_writer: std.io.BufferedWriter(4096, SocketWriter),
     /// True when write() has been called
-    is_dirty: bool = false,
+    is_flushed: bool,
+    /// Response body, can be written to through the writer interface
+    body: std.ArrayList(u8).Writer,
 
-    /// Creates a new Response object with its connection set
-    pub fn init(handle: std.os.fd_t, allocator: *Allocator) Response {
-        return Response{
-            .headers = Headers.init(allocator),
-            .writer = std.io.bufferedOutStream(SocketWriter{ .handle = handle }),
-        };
+    pub const Error = SocketWriter.Error || error{OutOfMemory};
+
+    /// Returns a writer interface, any data written to the writer
+    /// will be appended to the response's body
+    pub fn writer(self: *Response) std.io.Writer(*Response, Error, write) {
+        return .{ .context = self };
     }
 
-    /// Writes HTTP Response to the peer
-    pub fn write(self: *Self, contents: []const u8) SocketWriter.Error!void {
-        self.is_dirty = true;
-        var writer = self.writer.writer();
-
-        // write status line
-        const status_code_string = self.status_code.toString();
-        try writer.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(self.status_code), status_code_string });
-
-        // write headers
-        for (self.headers.items()) |header| {
-            try writer.print("{}: {}\r\n", .{ header.key, header.value });
-        }
-
-        // Unless specified by the user, write content length
-        if (!self.headers.contains("Content-Length")) {
-            try writer.print("Content-Length: {}\r\n", .{contents.len});
-        }
-
-        if (!std.io.is_async) {
-            try writer.writeAll("Connection: Close\r\n");
-        }
-
-        // Carrot Return after headers to tell clients where headers end, and body starts
-        try writer.writeAll("\r\n");
-
-        try writer.writeAll(contents);
-        try self.writer.flush();
+    /// Appends the buffer to the body of the response
+    fn write(self: *Response, buffer: []const u8) Error!usize {
+        return self.body.write(buffer);
     }
 
     /// Sends a status code with an empty body and the current headers to the client
-    pub fn writeHeader(self: *Self, status_code: StatusCode) SocketWriter.Error!void {
-        self.is_dirty = true;
-        var writer = self.writer.writer();
+    pub fn writeHeader(self: *Response, status_code: StatusCode) Error!void {
+        self.status_code = status_code;
+        try self.flush();
+    }
 
-        try writer.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(status_code), status_code.toString() });
+    /// Sends the response to the client, can only be called once
+    /// Any further calls is a panic
+    pub fn flush(self: *Response) Error!void {
+        std.debug.assert(!self.is_flushed);
+        self.is_flushed = true;
+
+        const body = self.body.context.items;
+        var socket = self.socket_writer.writer();
+
+        // Print the status line, we only support HTTP/1.1 for now
+        try socket.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(self.status_code), self.status_code.toString() });
+
         // write headers
-        var it = self.headers.iterator();
-        while (it.next()) |header| {
-            try writer.print("{}: {}\r\n", .{ header.key, header.value });
+        for (self.headers.items()) |header| {
+            try socket.print("{}: {}\r\n", .{ header.key, header.value });
         }
 
+        // If user has not set content-length, we add it calculated by the length of the body
+        if (!self.headers.contains("Content-Length")) {
+            try socket.print("Content-Length: {}\r\n", .{body.len});
+        }
+
+        // if `io_mode` is .blocking, close the connection
         if (!std.io.is_async) {
-            try writer.writeAll("Connection: Close\r\n");
+            try socket.writeAll("Connection: Close\r\n");
         }
 
-        // Carrot Return after headers to tell clients where headers end, and body starts
-        try writer.writeAll("\r\n");
+        try socket.writeAll("\r\n");
 
-        try self.writer.flush();
+        try socket.writeAll(body);
+        try self.socket_writer.flush();
     }
 
-    pub fn notFound(self: *Self) SocketWriter.Error!void {
+    /// Sends a `404 - Resource not found` response
+    pub fn notFound(self: *Response) Error!void {
         self.status_code = .NotFound;
-        try self.write("Resource not found\n");
-    }
-
-    /// frees memory of `headers`
-    pub fn deinit(self: Self) void {
-        self.headers.deinit();
+        try self.body.writeAll("Resource not found\n");
     }
 };

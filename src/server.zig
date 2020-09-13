@@ -98,20 +98,20 @@ pub const Server = struct {
 
     /// Sets the max allowed clients before they receive `Connection Refused`
     /// This function must be called before `start`.
-    pub fn setMaxConnections(self: *Self, size: u32) void {
+    pub fn setMaxConnections(self: *Server, size: u32) void {
         self.host_connection.kernel_backlog = size;
     }
 
     /// Gracefully shuts down the server, this function is thread safe
-    pub fn shutdown(self: *Self) void {
+    pub fn shutdown(self: *Server) void {
         self.should_stop.set(1);
     }
 
     /// Frees the frame stack
-    pub fn deinit(self: Self) void {}
+    pub fn deinit(self: Server) void {}
 
     /// Starts listening for connections and serves responses
-    pub fn start(self: *Self) !void {
+    pub fn start(self: *Server) !void {
         var server = self.host_connection;
         // deinit also closes the connection
         defer server.deinit();
@@ -173,8 +173,17 @@ fn serveRequest(
         var arena = std.heap.ArenaAllocator.init(connection.server.allocator);
         defer arena.deinit();
 
+        // create on the stack and allow the user to write to its writer
+        var body = std.ArrayList(u8).init(&arena.allocator);
         // 'var' as we allocate it on the stack of the loop and we need to modify it
-        var response = Response.init(connection.conn.file.handle, &arena.allocator);
+        var response = Response{
+            .headers = resp.Headers.init(&arena.allocator),
+            .socket_writer = std.io.bufferedOutStream(
+                resp.SocketWriter{ .handle = connection.conn.file.handle },
+            ),
+            .is_flushed = false,
+            .body = body.writer(),
+        };
 
         // parse the HTTP Request and if successful, call the handler function asynchronous
         var request = req.parse(
@@ -201,10 +210,8 @@ fn serveRequest(
                 }
             };
 
-            // if user did not call response.write(), create a 404 resource not found
-            // to ensure the client receives a response but no valid reply is possible.
-            if (!response.is_dirty) {
-                try response.notFound();
+            if (!response.is_flushed) {
+                try response.flush();
             }
 
             // We don't support keep-alive in blocking mode as it would block
@@ -230,7 +237,8 @@ fn serveRequest(
             try response.headers.put("Content-Type", "text/plain;charset=utf-8");
 
             response.status_code = .BadRequest;
-            try response.write("400 Bad Request");
+            try response.writer().writeAll("400 Bad Request");
+            try response.flush();
             log.debug("An error occured parsing the request: {}\n", .{err});
             break;
         }

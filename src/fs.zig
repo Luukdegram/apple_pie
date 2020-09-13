@@ -88,8 +88,8 @@ pub fn serveFile(
         return error.NotAFile;
     }
 
-    response.is_dirty = true;
-    var stream = response.writer.writer();
+    response.is_flushed = true;
+    var stream = response.socket_writer.writer();
     const len = stat.size;
 
     // write status line
@@ -109,9 +109,9 @@ pub fn serveFile(
 
     //Carrot Return after headers to tell clients where headers end, and body starts
     try stream.writeAll("\r\n");
-    try response.writer.flush();
+    try response.socket_writer.flush();
 
-    const out = response.writer.unbuffered_writer.handle;
+    const out = response.socket_writer.unbuffered_writer.handle;
     var remaining: u64 = len;
     while (remaining > 0) {
         remaining -= try std.os.sendfile(out, file.handle, len - remaining, remaining, &[_]std.os.iovec_const{}, &[_]std.os.iovec_const{}, 0);
