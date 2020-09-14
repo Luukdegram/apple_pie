@@ -178,7 +178,7 @@ fn serveRequest(
         // 'var' as we allocate it on the stack of the loop and we need to modify it
         var response = Response{
             .headers = resp.Headers.init(&arena.allocator),
-            .socket_writer = std.io.bufferedOutStream(
+            .socket_writer = std.io.bufferedWriter(
                 resp.SocketWriter{ .handle = connection.conn.file.handle },
             ),
             .is_flushed = false,
@@ -221,7 +221,6 @@ fn serveRequest(
             // if the client requests to close the connection
             if (parsed_request.headers.contains("Connection")) {
                 const entries = (try parsed_request.headers.get(&arena.allocator, "Connection")).?;
-                arena.allocator.free(entries);
                 if (std.ascii.eqlIgnoreCase(entries[0].value, "close")) {
                     break;
                 }
@@ -233,6 +232,9 @@ fn serveRequest(
                     break;
                 }
             }
+
+            // if http version 1.0, no persistant connection is supported, therefore end connection
+            if (std.mem.eql(u8, "HTTP/1.0", parsed_request.protocol)) break;
         } else |err| {
             try response.headers.put("Content-Type", "text/plain;charset=utf-8");
 

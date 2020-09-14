@@ -195,13 +195,18 @@ pub const Response = struct {
             try socket.print("Content-Length: {}\r\n", .{body.len});
         }
 
+        // set default Content-Type.
+        // Adding headers is expensive so add it as default when we write to the socket
+        if (!self.headers.contains("Content-Type")) {
+            try socket.writeAll("Content-Type: text/plain; charset=utf-8\r\n");
+        }
+
         // if `io_mode` is .blocking, close the connection
         if (!std.io.is_async) {
             try socket.writeAll("Connection: Close\r\n");
         }
 
         try socket.writeAll("\r\n");
-
         try socket.writeAll(body);
         try self.socket_writer.flush();
     }
