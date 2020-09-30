@@ -8,7 +8,7 @@ pub const Request = struct {
     /// Url object, get be used to retrieve path or query parameters
     url: Url,
     /// Headers according to http2
-    headers: std.http.Headers,
+    headers: std.StringHashMap([]const u8),
     /// Body, which can be empty
     body: []const u8,
     /// allocator which is used to free Request's memory
@@ -18,10 +18,13 @@ pub const Request = struct {
     /// If the buffer was too small to include the body,
     /// extra memory will be allocated and is freed upon `deinit`
     allocated_body: bool,
+    /// Length of requests body
+    content_length: usize,
 
     /// Frees all memory of a Response, as this loops through each header to remove its memory
     /// you may consider using an arena allocator to free all memory at once for better perf
     pub fn deinit(self: *Request) void {
+        var it = self.headers.iterator();
         self.headers.deinit();
         if (self.allocated_body) {
             self.allocator.free(self.body);
@@ -78,9 +81,10 @@ pub fn parse(
             .raw_query = "",
         },
         .allocator = allocator,
-        .headers = std.http.Headers.init(allocator),
+        .headers = std.StringHashMap([]const u8).init(allocator),
         .allocated_body = false,
         .protocol = "HTTP/1.1",
+        .content_length = 0,
     };
 
     // Accept user defined buffer size for requestline + headers
@@ -94,53 +98,56 @@ pub fn parse(
     while (i < read) {
         switch (state) {
             .method => {
-                if (std.mem.indexOf(u8, buffer[i..], " ")) |index| {
-                    request.method = buffer[i .. i + index];
-                    i += request.method.len + 1;
-                    state = .url;
-                } else {
+                const index = std.mem.indexOf(u8, buffer[i..], " ") orelse
                     return ParseError.InvalidMethod;
-                }
+
+                request.method = buffer[i .. i + index];
+                i += request.method.len + 1;
+                state = .url;
             },
             .url => {
-                if (std.mem.indexOf(u8, buffer[i..], " ")) |index| {
-                    request.url = Url.init(buffer[i .. i + index]);
-                    i += request.url.raw_path.len + 1;
-                    state = .protocol;
-                } else {
+                const index = std.mem.indexOf(u8, buffer[i..], " ") orelse
                     return ParseError.InvalidUrl;
-                }
+
+                request.url = Url.init(buffer[i .. i + index]);
+                i += request.url.raw_path.len + 1;
+                state = .protocol;
             },
             .protocol => {
-                if (std.mem.indexOf(u8, buffer[i..], "\r\n")) |index| {
-                    if (index > 8) return ParseError.InvalidProtocol;
-                    request.protocol = buffer[i .. i + index];
-                    i += request.protocol.len + 2; // skip \r\n
-                    state = .header;
-                } else {
+                const index = std.mem.indexOf(u8, buffer[i..], "\r\n") orelse
                     return ParseError.InvalidProtocol;
-                }
+
+                if (index > 8) return ParseError.InvalidProtocol;
+                request.protocol = buffer[i .. i + index];
+                i += request.protocol.len + 2; // skip \r\n
+                state = .header;
             },
             .header => {
                 if (buffer[i] == '\r') {
-                    if (!request.headers.contains("Content-Length")) break;
+                    if (request.content_length == 0) break;
                     state = .body;
                     i += 2; //Skip the \r\n
                     continue;
                 }
-                const index = std.mem.indexOf(u8, buffer[i..], ": ") orelse return ParseError.MissingHeaders;
+                const index = std.mem.indexOf(u8, buffer[i..], ": ") orelse
+                    return ParseError.MissingHeaders;
+
                 const key = buffer[i .. i + index];
                 i += key.len + 2; // skip ": "
 
-                const end = std.mem.indexOf(u8, buffer[i..], "\r\n") orelse return ParseError.IncorrectHeader;
+                const end = std.mem.indexOf(u8, buffer[i..], "\r\n") orelse
+                    return ParseError.IncorrectHeader;
+
                 const value = buffer[i .. i + end];
                 i += value.len + 2; //skip \r\n
-                try request.headers.append(key, value, null);
+                try request.headers.put(key, value);
+
+                if (std.ascii.eqlIgnoreCase(key, "content-length")) {
+                    request.content_length = try std.fmt.parseInt(usize, value, 10);
+                }
             },
             .body => {
-                const entries = (try request.headers.get(allocator, "Content-Length")).?;
-                defer allocator.free(entries);
-                const length = try std.fmt.parseInt(usize, entries[0].value, 10);
+                const length = request.content_length;
 
                 // if body fit inside the 4kb buffer, we use that,
                 // else allocate more memory
@@ -175,7 +182,6 @@ test "Basic request parse" {
     var request = try parse(allocator, stream, 4096);
     defer request.deinit();
 
-    std.testing.expect(request.headers.data.items.len == 4);
     std.testing.expectEqualSlices(u8, "/test", request.url.path);
     std.testing.expectEqualSlices(u8, "HTTP/1.1", request.protocol);
     std.testing.expectEqualSlices(u8, "GET", request.method);

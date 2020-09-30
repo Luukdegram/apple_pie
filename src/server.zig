@@ -220,8 +220,8 @@ fn serveRequest(
 
             // if the client requests to close the connection
             if (parsed_request.headers.contains("Connection")) {
-                const entries = (try parsed_request.headers.get(&arena.allocator, "Connection")).?;
-                if (std.ascii.eqlIgnoreCase(entries[0].value, "close")) {
+                const header = parsed_request.headers.get("Connection").?;
+                if (std.ascii.eqlIgnoreCase(header, "close")) {
                     break;
                 }
             }
