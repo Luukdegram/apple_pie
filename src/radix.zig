@@ -238,3 +238,17 @@ pub fn RadixTree(comptime T: type) type {
         }
     };
 }
+
+/// Finds the length of the longest prefix between 2 strings
+/// i.e.:
+/// lhs: foop
+/// rhs: foobar
+/// result: 2 -> matches foo as prefix
+fn longestPrefix(comptime lhs: []const u8, comptime rhs: []const u8) usize {
+    const max = if (lhs.len < rhs.len) lhs.len else rhs.len;
+
+    var i: u8 = 0;
+    return while (i < max) : (i += 1) {
+        if (lhs[i] != rhs[i]) break i;
+    } else i;
+}

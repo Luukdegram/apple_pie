@@ -1,6 +1,7 @@
 const std = @import("std");
 const http = @import("apple_pie");
 const fs = http.FileServer;
+const router = http.router;
 
 pub const io_mode = .evented;
 
@@ -15,14 +16,14 @@ pub fn main() !void {
     try http.server.listenAndServe(
         allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),
-        comptime MiniRouter(&[_]Route{
-            .{
-                .path = "/fs",
-                .serveFn = fs.serve,
-            },
+        comptime router.router(&[_]router.Route{
             .{
                 .path = "/",
-                .serveFn = index,
+                .handler = index,
+            },
+            .{
+                .path = "/files",
+                .handler = fs.serve,
             },
         }),
     );
