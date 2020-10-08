@@ -15,15 +15,16 @@ pub const Route = struct {
 /// Generic function that inserts each route's path into a radix tree
 /// to retrieve the right route when a request has been made
 pub fn router(comptime routes: []const Route) HandlerFn {
-    comptime var radix = RadixTree(Route){};
-    inline for (routes) |r| {
-        _ = radix.insert(r.path, r);
+    comptime var radix = RadixTree(usize){};
+    inline for (routes) |r, i| {
+        _ = radix.insert(r.path, i);
     }
     return struct {
-        fn serve(response: *Response, request: Request) callconv(.Async) !void {
-            if (radix.getLongestPrefix(request.url.path)) |route|
-                return route.handler(response, request)
-            else
+        fn serve(response: *Response, request: Request) !void {
+            if (radix.getLongestPrefix(request.url.path)) |route| inline for (routes) |r, i| {
+                if (i == route)
+                    return r.handler(response, request);
+            } else
                 return notFound(response, request);
         }
     }.serve;
@@ -32,8 +33,4 @@ pub fn router(comptime routes: []const Route) HandlerFn {
 /// Returns a 404 message
 fn notFound(response: *Response, request: Request) !void {
     try response.notFound();
-}
-
-comptime {
-    std.meta.refAllDecls(@This());
 }
