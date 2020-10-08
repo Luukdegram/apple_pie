@@ -4,8 +4,8 @@ const resp = @import("response.zig");
 const testing = std.testing;
 const net = std.net;
 const Allocator = std.mem.Allocator;
-pub const Request = req.Request;
-pub const Response = resp.Response;
+const Request = req.Request;
+const Response = resp.Response;
 
 const log = std.log.scoped(.server);
 

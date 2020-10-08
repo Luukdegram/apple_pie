@@ -23,7 +23,11 @@ pub fn main() !void {
             },
             .{
                 .path = "/files",
-                .handler = fs.serve,
+                .handler = serveFs,
+            },
+            .{
+                .path = "/hello/{id}",
+                .handler = hello,
             },
         }),
     );
@@ -31,6 +35,15 @@ pub fn main() !void {
 
 /// Very basic text-based response, it's up to implementation to set
 /// the correct content type of the message
-fn index(response: *http.Response, request: http.Request) !void {
+fn index(response: *http.Response, request: http.Request, captures: anytype) !void {
     try response.writer().writeAll("Hello Zig!");
+}
+
+fn hello(resp: *http.Response, req: http.Request, captures: anytype) !void {
+    const name = if (captures.len > 0) captures[0] else "world";
+    try resp.writer().print("Hello {}\n", .{name});
+}
+
+fn serveFs(resp: *http.Response, req: http.Request, captures: anytype) !void {
+    return fs.serve(resp, req);
 }
