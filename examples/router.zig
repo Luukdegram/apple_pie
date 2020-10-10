@@ -22,11 +22,11 @@ pub fn main() !void {
                 .handler = index,
             },
             .{
-                .path = "/files",
+                .path = "/files/*",
                 .handler = serveFs,
             },
             .{
-                .path = "/hello/{id}",
+                .path = "/hello/:name",
                 .handler = hello,
             },
         }),
@@ -39,8 +39,7 @@ fn index(response: *http.Response, request: http.Request, captures: anytype) !vo
     try response.writer().writeAll("Hello Zig!");
 }
 
-fn hello(resp: *http.Response, req: http.Request, captures: anytype) !void {
-    const name = if (captures.len > 0) captures[0] else "world";
+fn hello(resp: *http.Response, req: http.Request, name: usize) !void {
     try resp.writer().print("Hello {}\n", .{name});
 }
 

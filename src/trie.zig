@@ -1,5 +1,11 @@
 const std = @import("std");
 
+/// Entry in the param list
+pub const Entry = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
 /// Small radix trie used for routing
 /// This radix trie works different from regular radix tries
 /// as each node is made up from a piece rather than a singular character
@@ -39,12 +45,6 @@ pub fn Trie(comptime T: type) type {
                 params: [max_params]Entry,
                 param_count: usize,
             },
-        };
-
-        /// Entry in the param list
-        const Entry = struct {
-            key: []const u8,
-            value: []const u8,
         };
 
         /// Inserts new nodes based on the given path
