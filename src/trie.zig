@@ -97,6 +97,10 @@ pub fn Trie(comptime T: type) type {
         /// when a wildcard such as * is found, it will return T
         /// If a colon is found, it will add the path piece onto the param list
         pub fn get(self: *Self, path: []const u8) Result {
+            if (path.len == 1) {
+                return .{ .static = self.root.data.? };
+            }
+
             var params: [max_params]Entry = undefined;
             var param_count: usize = 0;
             var current = &self.root;

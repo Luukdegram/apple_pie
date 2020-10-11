@@ -29,20 +29,34 @@ pub fn main() !void {
                 .path = "/hello/:name",
                 .handler = hello,
             },
+            .{
+                .path = "/posts/:post/messages/:message",
+                .handler = messages,
+            },
         }),
     );
 }
 
 /// Very basic text-based response, it's up to implementation to set
 /// the correct content type of the message
-fn index(response: *http.Response, request: http.Request, captures: anytype) !void {
+fn index(response: *http.Response, request: http.Request) !void {
     try response.writer().writeAll("Hello Zig!");
 }
 
-fn hello(resp: *http.Response, req: http.Request, name: usize) !void {
+fn hello(resp: *http.Response, req: http.Request, name: []const u8) !void {
     try resp.writer().print("Hello {}\n", .{name});
 }
 
-fn serveFs(resp: *http.Response, req: http.Request, captures: anytype) !void {
+fn serveFs(resp: *http.Response, req: http.Request) !void {
     return fs.serve(resp, req);
+}
+
+fn messages(resp: *http.Response, req: http.Request, args: struct {
+    post: usize,
+    message: []const u8,
+}) !void {
+    try resp.writer().print("Post nr.{}, message '{}'\n", .{
+        args.post,
+        args.message,
+    });
 }
