@@ -1,6 +1,7 @@
 const std = @import("std");
 const http = @import("apple_pie");
 const fs = http.FileServer;
+const router = http.router;
 
 pub const io_mode = .evented;
 
@@ -9,20 +10,28 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = &gpa.allocator;
 
-    try fs.init(allocator, .{ .dir_path = "src", .base_path = "fs" });
+    try fs.init(allocator, .{ .dir_path = "src", .base_path = "files" });
     defer fs.deinit();
 
     try http.server.listenAndServe(
         allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),
-        comptime MiniRouter(&[_]Route{
-            .{
-                .path = "/fs",
-                .serveFn = fs.serve,
-            },
+        comptime router.router(&[_]router.Route{
             .{
                 .path = "/",
-                .serveFn = index,
+                .handler = index,
+            },
+            .{
+                .path = "/files/*",
+                .handler = serveFs,
+            },
+            .{
+                .path = "/hello/:name",
+                .handler = hello,
+            },
+            .{
+                .path = "/posts/:post/messages/:message",
+                .handler = messages,
             },
         }),
     );
@@ -34,30 +43,20 @@ fn index(response: *http.Response, request: http.Request) !void {
     try response.writer().writeAll("Hello Zig!");
 }
 
-/// A very basic router that only checks for exact matches of a path
-/// You will probably want to implement your own router
-fn MiniRouter(comptime routes: []const Route) http.server.RequestHandler {
-    std.debug.assert(routes.len > 0);
-
-    return struct {
-        fn serve(response: *http.Response, request: http.Request) callconv(.Async) !void {
-            inline for (routes) |route| {
-                if (std.mem.startsWith(u8, request.url.path, route.path)) {
-                    return route.serveFn(response, request);
-                }
-            }
-        }
-    }.serve;
+fn hello(resp: *http.Response, req: http.Request, name: []const u8) !void {
+    try resp.writer().print("Hello {}\n", .{name});
 }
 
-const Route = struct {
-    path: []const u8,
-    serveFn: http.server.RequestHandler,
+fn serveFs(resp: *http.Response, req: http.Request) !void {
+    return fs.serve(resp, req);
+}
 
-    fn init(path: []const u8, serveFn: http.server.RequestHandler) Route {
-        return Route{
-            .path = path,
-            .serveFn = serveFn,
-        };
-    }
-};
+fn messages(resp: *http.Response, req: http.Request, args: struct {
+    post: usize,
+    message: []const u8,
+}) !void {
+    try resp.writer().print("Post nr.{}, message '{}'\n", .{
+        args.post,
+        args.message,
+    });
+}

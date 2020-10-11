@@ -6,3 +6,4 @@ pub const RequestHandler = server.RequestHandler;
 pub const FileServer = @import("fs.zig").FileServer;
 pub const MimeType = @import("mime_type.zig");
 pub const Template = @import("template.zig").Template;
+pub const router = @import("router.zig");

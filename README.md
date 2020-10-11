@@ -5,7 +5,7 @@ Apple pie is HTTP Server implementation in [Zig](https://ziglang.org). The initi
 ## Roadmap
 - Add control flow to the template engine. take a look at [examples/template.zig](examples/template.zig) for an example.
 - Multi platform async support. As Applie Pie is currently reliant on Zig's networking support in std, no Windows async is supported.
-- Full Router implementation. Currently routing is implemented by the user ([such as in examples/router.zig](examples/router.zig)), but the goal is to support a fast Router implementation with key features such as grouping and pathing etc.
+- Full Router implementation. ([such as in examples/router.zig](examples/router.zig)). TODO: Add support for methods.
 
 
 ## Example
