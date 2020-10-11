@@ -17,22 +17,10 @@ pub fn main() !void {
         allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),
         comptime router.router(&[_]router.Route{
-            .{
-                .path = "/",
-                .handler = index,
-            },
-            .{
-                .path = "/files/*",
-                .handler = serveFs,
-            },
-            .{
-                .path = "/hello/:name",
-                .handler = hello,
-            },
-            .{
-                .path = "/posts/:post/messages/:message",
-                .handler = messages,
-            },
+            router.get("/", index),
+            router.get("/files/*", serveFs),
+            router.get("/hello/:name", hello),
+            router.get("/posts/:post/messages/:message", messages),
         }),
     );
 }

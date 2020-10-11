@@ -13,20 +13,26 @@ pub const Route = struct {
     path: []const u8,
     /// The handler function that will be called when triggered
     handler: anytype,
+    /// http method
+    method: Request.Method,
 };
 
 /// Generic function that inserts each route's path into a radix tree
 /// to retrieve the right route when a request has been made
 pub fn router(comptime routes: []const Route) HandlerFn {
-    var tree = trie.Trie(usize){};
+    comptime var trees: [10]trie.Trie(usize) = undefined;
+    inline for (trees) |*t| t.* = trie.Trie(usize){};
 
     inline for (routes) |r, i| {
         if (@typeInfo(@TypeOf(r.handler)) != .Fn) @compileError("Handler must be a function");
+
         const args = @typeInfo(@TypeOf(r.handler)).Fn.args;
+
         if (args.len < 2) @compileError("Handler must have atleast 2 arguments");
         if (args[0].arg_type.? != *Response) @compileError("First parameter must be of type " ++ @typeName(*Response));
         if (args[1].arg_type.? != Request) @compileError("Second parameter must be of type " ++ @typeName(Request));
-        tree.insert(r.path, i);
+
+        trees[@enumToInt(r.method)].insert(r.path, i);
     }
 
     return struct {
@@ -81,8 +87,23 @@ pub fn router(comptime routes: []const Route) HandlerFn {
         }
 
         fn serve(response: *Response, request: Request) !void {
-            switch (tree.get(request.url.path)) {
-                .none => return notFound(response, request),
+            switch (trees[@enumToInt(request.method)].get(request.url.path)) {
+                .none => {
+                    // if nothing was found for current method, try the wildcard
+                    switch (trees[9].get(request.url.path)) {
+                        .none => return response.notFound(),
+                        .static => |index| {
+                            inline for (routes) |route, i|
+                                if (index == i) return handle(route, &[_]trie.Entry{}, response, request);
+                        },
+                        .with_params => |object| {
+                            inline for (routes) |route, i| {
+                                if (object.data == i)
+                                    return handle(route, object.params[0..object.param_count], response, request);
+                            }
+                        },
+                    }
+                },
                 .static => |index| {
                     inline for (routes) |route, i| {
                         if (index == i) return handle(route, &[_]trie.Entry{}, response, request);
@@ -90,9 +111,8 @@ pub fn router(comptime routes: []const Route) HandlerFn {
                 },
                 .with_params => |object| {
                     inline for (routes) |route, i| {
-                        if (object.data == i) {
+                        if (object.data == i)
                             return handle(route, object.params[0..object.param_count], response, request);
-                        }
                     }
                 },
             }
@@ -100,7 +120,32 @@ pub fn router(comptime routes: []const Route) HandlerFn {
     }.serve;
 }
 
-/// Returns a 404 message
-fn notFound(response: *Response, request: Request) !void {
-    try response.notFound();
+/// Creates a new `Route` for the given HTTP Method that will be
+/// triggered based on its path conditions
+/// the `handler` function must have atleast 2 arguments where
+/// @TypeOf(arg[0]) == *Response
+/// @TypeOf(arg[1]) == Request
+///
+/// It's allowed to provide a 3rd argument if path contains parameters such as ':<name>'
+/// The caught parameters will be parsed into the type of the argument
+pub fn handle(
+    comptime method: Request.Method,
+    comptime path: []const u8,
+    comptime handler: anytype,
+) Route {
+    return Route{
+        .path = path,
+        .handler = handler,
+        .method = method,
+    };
+}
+
+/// Shorthand function to create a `Route` where method is 'GET'
+pub fn get(comptime path: []const u8, comptime handler: anytype) Route {
+    return handle(.get, path, handler);
+}
+
+/// Shorthand function to create a `Route` where method is 'POST'
+pub fn post(comptime path: []const u8, comptime handler: anytype) Route {
+    return handle(.post, path, handler);
 }
