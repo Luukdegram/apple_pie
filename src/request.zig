@@ -3,11 +3,44 @@ const Url = @import("url.zig").Url;
 
 /// Represents a request made by a client
 pub const Request = struct {
+    /// HTTP methods as specified in RFC 7231
+    pub const Method = enum {
+        get,
+        head,
+        post,
+        put,
+        delete,
+        connect,
+        options,
+        trace,
+        patch,
+        any,
+
+        fn fromString(method: []const u8) Method {
+            return switch (method[0]) {
+                'G' => Method.get,
+                'H' => Method.head,
+                'P' => switch (method[1]) {
+                    'O' => Method.post,
+                    'U' => Method.put,
+                    else => Method.patch,
+                },
+                //'p' => if (method[1] == 'o') .post else if (method[1] == 'u') .put else .patch,
+                //'P' => .post,
+                'D' => Method.delete,
+                'C' => Method.connect,
+                'O' => Method.options,
+                'T' => Method.trace,
+                else => Method.any,
+            };
+        }
+    };
+
     /// GET, POST, PUT, DELETE or PATCH
-    method: []const u8,
+    method: Method,
     /// Url object, get be used to retrieve path or query parameters
     url: Url,
-    /// Headers according to http2
+    /// HTTP Request headers
     headers: std.StringHashMap([]const u8),
     /// Body, which can be empty
     body: []const u8,
@@ -74,7 +107,7 @@ pub fn parse(
 
     var request: Request = .{
         .body = "",
-        .method = "GET",
+        .method = .get,
         .url = Url{
             .path = "/",
             .raw_path = "/",
@@ -101,8 +134,8 @@ pub fn parse(
                 const index = std.mem.indexOf(u8, buffer[i..], " ") orelse
                     return ParseError.InvalidMethod;
 
-                request.method = buffer[i .. i + index];
-                i += request.method.len + 1;
+                request.method = Request.Method.fromString(buffer[i .. i + index]);
+                i += index + 1;
                 state = .url;
             },
             .url => {
@@ -184,6 +217,6 @@ test "Basic request parse" {
 
     std.testing.expectEqualSlices(u8, "/test", request.url.path);
     std.testing.expectEqualSlices(u8, "HTTP/1.1", request.protocol);
-    std.testing.expectEqualSlices(u8, "GET", request.method);
+    std.testing.expectEqual(Request.Method.get, request.method);
     std.testing.expect(request.body.len == "some body".len);
 }
