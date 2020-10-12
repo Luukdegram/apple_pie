@@ -149,3 +149,44 @@ pub fn get(comptime path: []const u8, comptime handler: anytype) Route {
 pub fn post(comptime path: []const u8, comptime handler: anytype) Route {
     return handle(.post, path, handler);
 }
+
+/// Shorthand function to create a `Route` where method is 'PATCH'
+pub fn patch(comptime path: []const u8, comptime handler: anytype) Route {
+    return handle(.patch, path, handler);
+}
+
+/// Shorthand function to create a `Route` where method is 'PUT'
+pub fn put(comptime path: []const u8, comptime handler: anytype) Route {
+    return handle(.put, path, handler);
+}
+
+/// Shorthand function to create a `Route` where method is 'HEAD'
+pub fn head(comptime path: []const u8, comptime handler: anytype) Route {
+    return handle(.head, path, handler);
+}
+
+/// Shorthand function to create a `Route` where method is 'DELETE'
+pub fn delete(comptime path: []const u8, comptime handler: anytype) Route {
+    return handle(.delete, path, handler);
+}
+
+/// Shorthand function to create a `Route` where method is 'CONNECT'
+pub fn connect(comptime path: []const u8, comptime handler: anytype) Route {
+    return handle(.connect, path, handler);
+}
+
+/// Shorthand function to create a `Route` where method is 'OPTIONS'
+pub fn options(comptime path: []const u8, comptime handler: anytype) Route {
+    return handle(.options, path, handler);
+}
+
+/// Shorthand function to create a `Route` where method is 'TRACE'
+pub fn trace(comptime path: []const u8, comptime handler: anytype) Route {
+    return handle(.trace, path, handler);
+}
+
+/// Shorthand function to create a `Route` which will be matched to any
+/// request method. It is still recommended to use the other specific methods
+pub fn any(comptime path: []const u8, comptime handler: anytype) Route {
+    return handle(.any, path, handler);
+}
