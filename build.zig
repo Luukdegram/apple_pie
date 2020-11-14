@@ -2,10 +2,16 @@ const std = @import("std");
 const Builder = std.build.Builder;
 
 pub fn build(b: *Builder) void {
+    const pike = std.build.Pkg{
+        .name = "pike",
+        .path = "libs/pike/pike.zig",
+    };
+
     // builds the library as a static library
     const mode = b.standardReleaseOptions();
     const lib = b.addStaticLibrary("apple_pie", "src/server.zig");
     lib.setBuildMode(mode);
+    lib.addPackage(pike);
     lib.install();
 
     // builds and runs the tests
@@ -34,7 +40,11 @@ pub fn build(b: *Builder) void {
 
     // Allows for running the example
     var example = b.addExecutable("example", example_file);
-    example.addPackagePath("apple_pie", "src/apple_pie.zig");
+    example.addPackage(.{
+        .name = "apple_pie",
+        .path = "src/apple_pie.zig",
+        .dependencies = &[_]std.build.Pkg{pike},
+    });
     example.setBuildMode(mode);
     example.install();
 

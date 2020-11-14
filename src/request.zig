@@ -1,5 +1,6 @@
 const std = @import("std");
 const Url = @import("url.zig").Url;
+const pike = @import("pike");
 
 /// Represents a request made by a client
 pub const Request = struct {
@@ -92,9 +93,9 @@ pub const ParseError = error{
 /// bigger than this size will be skipped.
 pub fn parse(
     allocator: *std.mem.Allocator,
-    reader: anytype,
+    socket: *pike.Socket,
     buffer_size: usize,
-) (ParseError || @TypeOf(reader).Error)!Request {
+) !Request {
     const State = enum {
         method,
         url,
@@ -124,7 +125,7 @@ pub fn parse(
     // we allocate memory for body if neccesary seperately.
     var buffer = try allocator.alloc(u8, buffer_size);
 
-    const read = try reader.read(buffer);
+    const read = try socket.read(buffer);
     buffer = try allocator.resize(buffer, read);
 
     var i: usize = 0;
@@ -189,7 +190,10 @@ pub fn parse(
                 } else {
                     var body = try allocator.alloc(u8, length);
                     std.mem.copy(u8, body, buffer[i..]);
-                    _ = try reader.readAll(body[read - i ..]);
+                    var index: usize = read - i;
+                    while (index < body.len) {
+                        index += try socket.read(body[index..]);
+                    }
                     request.body = body;
                     request.allocated_body = true;
                 }

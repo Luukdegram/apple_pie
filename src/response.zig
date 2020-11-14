@@ -1,4 +1,5 @@
 const std = @import("std");
+const pike = @import("pike");
 const net = std.net;
 const Allocator = std.mem.Allocator;
 
@@ -115,11 +116,18 @@ pub const Headers = std.StringArrayHashMap([]const u8);
 /// MSG_NOSIGNAL flag to ignore BrokenPipe signals
 /// This is needed so the server does not get interrupted
 pub const SocketWriter = struct {
-    handle: std.os.fd_t,
+    handle: *pike.Socket,
 
     /// Alias for `std.os.SendError`
     /// Required constant for `std.io.BufferedWriter`
-    pub const Error = std.os.SendError;
+    pub const Error = error{
+        DiskQuota,
+        FileTooBig,
+        InputOutput,
+        NoSpaceLeft,
+        OperationAborted,
+        NotOpenForWriting,
+    } || std.os.WriteError;
 
     /// Uses fmt to format the given bytes and writes to the socket
     pub fn print(self: SockerWriter, comptime format: []const u8, args: anytype) Error!usize {
@@ -129,7 +137,7 @@ pub const SocketWriter = struct {
     /// writes to the socket
     /// Note that this may not write all bytes, use writeAll for that
     pub fn write(self: SocketWriter, bytes: []const u8) Error!usize {
-        return std.os.send(self.handle, bytes, std.os.MSG_NOSIGNAL);
+        return self.handle.write(bytes);
     }
 
     /// Loops untill all bytes have been written to the socket
