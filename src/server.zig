@@ -13,7 +13,7 @@ const log = std.log.scoped(.server);
 const Clients = std.atomic.Queue(*Server.Client);
 
 /// Function signature of what the handler function must match
-pub const RequestHandler = fn handle(*Response, Request) callconv(.Async) anyerror!void;
+pub const RequestHandler = fn handle(*Response, Request) anyerror!void;
 
 pub const Server = struct {
     /// The connection clients will connect to
@@ -39,8 +39,6 @@ pub const Server = struct {
         address: net.Address,
         /// Frame pointer to the request handler
         frame: @Frame(serveRequest),
-        /// The frame stack required for user's function
-        frame_stack: []align(16) u8,
     };
 
     /// Initializes a new Server with its default values,
@@ -50,16 +48,20 @@ pub const Server = struct {
         handlerFn: RequestHandler,
     ) !Server {
         try pike.init();
+
+        var socket = try pike.Socket.init(
+            std.os.AF_INET,
+            std.os.SOCK_STREAM,
+            std.os.IPPROTO_TCP,
+            0,
+        );
+        try socket.set(.reuse_address, true);
+
         return Server{
             .address = address,
             .request_handler = handlerFn,
             .allocator = allocator,
-            .socket = try pike.Socket.init(
-                std.os.AF_INET,
-                std.os.SOCK_STREAM,
-                std.os.IPPROTO_TCP,
-                0,
-            ),
+            .socket = socket,
             .frame = undefined,
             .clients = Clients.init(),
         };
@@ -84,16 +86,16 @@ pub const Server = struct {
     pub fn start(self: *Server) !void {
         defer self.socket.deinit();
 
-        try self.socket.set(.reuse_address, true);
         try self.socket.bind(self.address);
         try self.socket.listen(128);
-
-        self.frame = async self.run();
 
         const notifier = try pike.Notifier.init();
         defer notifier.deinit();
 
+        try self.socket.registerTo(&notifier);
+
         var shutdown = false;
+        self.frame = async self.run(&notifier);
 
         var signal_frame = async awaitSignal(&notifier, &shutdown);
 
@@ -105,14 +107,14 @@ pub const Server = struct {
     }
 
     /// Main server loop that awaits for new connections and dispatches them
-    fn run(self: *Server) callconv(.Async) !void {
+    fn run(self: *Server, notifier: *const pike.Notifier) callconv(.Async) !void {
         var retries: usize = 0;
         while (true) {
             var connection = self.socket.accept() catch |err| switch (err) {
                 error.SocketNotListening => return,
                 else => {
                     if (retries > 4) return err;
-                    log.warn("Could not accept connection: {}\nRetrying...\n", .{err});
+                    log.warn("Could not accept connection: {}\nRetrying...", .{err});
 
                     // sleep for 100 ms extra per retry
                     std.time.sleep(std.time.ns_per_ms * 100 * (retries + 1));
@@ -120,10 +122,9 @@ pub const Server = struct {
                     continue;
                 },
             };
-            std.debug.print("Connected: {}\n", .{connection});
 
             const client = self.allocator.create(Client) catch |err| {
-                log.info("Could not create connection: {}\nClosing and continueing...\n", .{err});
+                log.info("Could not create connection: {}\nClosing and continueing...", .{err});
                 connection.socket.deinit();
                 continue;
             };
@@ -131,8 +132,7 @@ pub const Server = struct {
             client.* = .{
                 .socket = connection.socket,
                 .address = connection.address,
-                .frame_stack = try self.allocator.allocAdvanced(u8, 16, @frameSize(self.request_handler), .exact),
-                .frame = async serveRequest(self, client),
+                .frame = async serveRequest(self, client, notifier),
             };
         }
     }
@@ -164,7 +164,8 @@ pub fn listenAndServe(
 fn serveRequest(
     server: *Server,
     client: *Server.Client,
-) (Response.Error || req.ParseError)!void {
+    notifier: *const pike.Notifier,
+) !void {
     var node = Clients.Node{ .data = client };
 
     server.clients.put(&node);
@@ -176,6 +177,8 @@ fn serveRequest(
             server.allocator.destroy(client);
         }
     };
+
+    try client.socket.registerTo(notifier);
 
     // keep-alive by default, we will break out if Connection: close is set
     // or if `io_mode` is not set to '.evented'
@@ -205,14 +208,7 @@ fn serveRequest(
         );
 
         if (request) |parsed_request| {
-            var frame = @asyncCall(
-                client.frame_stack,
-                {},
-                server.request_handler,
-                .{ &response, parsed_request },
-            );
-
-            await frame catch |err| {
+            @call(.{}, server.request_handler, .{ &response, parsed_request }) catch |err| {
                 switch (err) {
                     std.os.SendError.BrokenPipe => break,
                     else => {
