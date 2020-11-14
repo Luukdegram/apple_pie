@@ -1,0 +1,3 @@
+[submodule "libs/pike"]
+	path = libs/pike
+	url = https://github.com/lithdew/pike
