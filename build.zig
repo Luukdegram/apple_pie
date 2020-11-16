@@ -7,11 +7,17 @@ pub fn build(b: *Builder) void {
         .path = "libs/pike/pike.zig",
     };
 
+    const zap = std.build.Pkg{
+        .name = "zap",
+        .path = "libs/zap/src/ziggo.zig",
+    };
+
     // builds the library as a static library
     const mode = b.standardReleaseOptions();
     const lib = b.addStaticLibrary("apple_pie", "src/server.zig");
     lib.setBuildMode(mode);
     lib.addPackage(pike);
+    lib.addPackage(zap);
     lib.install();
 
     // builds and runs the tests
@@ -43,7 +49,7 @@ pub fn build(b: *Builder) void {
     example.addPackage(.{
         .name = "apple_pie",
         .path = "src/apple_pie.zig",
-        .dependencies = &[_]std.build.Pkg{pike},
+        .dependencies = &[_]std.build.Pkg{ pike, zap },
     });
     example.setBuildMode(mode);
     example.install();

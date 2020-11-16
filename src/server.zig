@@ -2,6 +2,7 @@ const std = @import("std");
 const req = @import("request.zig");
 const resp = @import("response.zig");
 const pike = @import("pike");
+const zap = @import("zap");
 const testing = std.testing;
 const net = std.net;
 const Allocator = std.mem.Allocator;
@@ -84,6 +85,10 @@ pub const Server = struct {
 
     /// Starts listening for connections and serves responses
     pub fn start(self: *Server) !void {
+        try try zap.runtime.run(.{ .threads = 12 }, startRuntime, .{self});
+    }
+
+    fn startRuntime(self: *Server) !void {
         defer self.socket.deinit();
 
         try self.socket.bind(self.address);
@@ -100,7 +105,7 @@ pub const Server = struct {
         var signal_frame = async awaitSignal(&notifier, &shutdown);
 
         while (!shutdown) {
-            try notifier.poll(1_000_000);
+            try notifier.poll(10_000);
         }
 
         try nosuspend await signal_frame;
@@ -166,6 +171,8 @@ fn serveRequest(
     client: *Server.Client,
     notifier: *const pike.Notifier,
 ) !void {
+    zap.runtime.yield();
+
     var node = Clients.Node{ .data = client };
 
     server.clients.put(&node);
