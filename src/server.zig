@@ -69,7 +69,7 @@ pub const Server = struct {
     }
 
     /// Frees the server resources and closes all connections
-    pub fn deinit(self: Server) void {
+    pub fn deinit(self: *Server) void {
         defer pike.deinit();
         self.socket.deinit();
 
@@ -85,7 +85,7 @@ pub const Server = struct {
 
     /// Starts listening for connections and serves responses
     pub fn start(self: *Server) !void {
-        try try zap.runtime.run(.{ .threads = 12 }, startRuntime, .{self});
+        try try zap.runtime.run(.{}, startRuntime, .{self});
     }
 
     fn startRuntime(self: *Server) !void {
@@ -228,10 +228,6 @@ fn serveRequest(
             if (!response.is_flushed) {
                 try response.flush();
             }
-
-            // We don't support keep-alive in blocking mode as it would block
-            // other requests
-            if (!std.io.is_async) break;
 
             // if the client requests to close the connection
             if (parsed_request.headers.contains("Connection")) {

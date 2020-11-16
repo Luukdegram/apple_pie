@@ -127,7 +127,7 @@ pub const SocketWriter = struct {
         NoSpaceLeft,
         OperationAborted,
         NotOpenForWriting,
-    } || std.os.WriteError;
+    } || std.os.SendError;
 
     /// Uses fmt to format the given bytes and writes to the socket
     pub fn print(self: SockerWriter, comptime format: []const u8, args: anytype) Error!usize {
@@ -137,7 +137,7 @@ pub const SocketWriter = struct {
     /// writes to the socket
     /// Note that this may not write all bytes, use writeAll for that
     pub fn write(self: SocketWriter, bytes: []const u8) Error!usize {
-        return self.handle.write(bytes);
+        return self.handle.send(bytes, std.os.MSG_NOSIGNAL);
     }
 
     /// Loops untill all bytes have been written to the socket
