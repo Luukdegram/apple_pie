@@ -31,15 +31,13 @@ pub const Server = struct {
     /// Connections ready to be cleaned up
     clients: Clients,
     /// Server's frame for running async
-    frame: @Frame(run),
+    frame: @Frame(Server.run),
 
     const Client = struct {
         /// Pike's socket we're connected to
         socket: pike.Socket,
         /// The actual connection
         address: net.Address,
-        /// Frame pointer to the request handler
-        frame: @Frame(serveRequest),
     };
 
     /// Initializes a new Server with its default values,
@@ -89,8 +87,6 @@ pub const Server = struct {
     }
 
     fn startRuntime(self: *Server) !void {
-        defer self.socket.deinit();
-
         try self.socket.bind(self.address);
         try self.socket.listen(128);
 
@@ -128,16 +124,9 @@ pub const Server = struct {
                 },
             };
 
-            const client = self.allocator.create(Client) catch |err| {
-                log.info("Could not create connection: {}\nClosing and continueing...", .{err});
-                connection.socket.deinit();
+            zap.runtime.spawn(.{}, runClient, .{ self, notifier, connection.socket, connection.address }) catch |err| {
+                log.err("Failed to spawn client: {}", @errorName(err));
                 continue;
-            };
-
-            client.* = .{
-                .socket = connection.socket,
-                .address = connection.address,
-                .frame = async serveRequest(self, client, notifier),
             };
         }
     }
@@ -165,24 +154,34 @@ pub fn listenAndServe(
     try server.start();
 }
 
+fn runClient(
+    server: *Server,
+    notifier: *const pike.Notifier,
+    socket: pike.Socket,
+    address: net.Address,
+) void {
+    serveRequest(server, notifier, socket, address) catch |err| {
+        log.err("Unable to run client {}", @errorName(err));
+    };
+}
+
 /// Handles a request and returns a response based on the given handler function
 fn serveRequest(
     server: *Server,
-    client: *Server.Client,
     notifier: *const pike.Notifier,
+    socket: pike.Socket,
+    address: net.Address,
 ) !void {
     zap.runtime.yield();
 
+    var client = Server.Client{ .socket = socket, .address = address };
     var node = Clients.Node{ .data = client };
 
     server.clients.put(&node);
 
     // free up client resources
     defer if (server.clients.remove(&node)) {
-        suspend {
-            client.socket.deinit();
-            server.allocator.destroy(client);
-        }
+        client.socket.deinit();
     };
 
     try client.socket.registerTo(notifier);

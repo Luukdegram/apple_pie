@@ -9,7 +9,7 @@ pub fn build(b: *Builder) void {
 
     const zap = std.build.Pkg{
         .name = "zap",
-        .path = "libs/zap/src/ziggo.zig",
+        .path = "libs/zap/src/zap.zig",
     };
 
     // builds the library as a static library

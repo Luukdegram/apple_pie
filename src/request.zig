@@ -26,8 +26,6 @@ pub const Request = struct {
                     'U' => Method.put,
                     else => Method.patch,
                 },
-                //'p' => if (method[1] == 'o') .post else if (method[1] == 'u') .put else .patch,
-                //'P' => .post,
                 'D' => Method.delete,
                 'C' => Method.connect,
                 'O' => Method.options,
@@ -94,7 +92,7 @@ pub const ParseError = error{
 pub fn parse(
     allocator: *std.mem.Allocator,
     socket: *pike.Socket,
-    buffer_size: usize,
+    comptime buffer_size: usize,
 ) !Request {
     const State = enum {
         method,
@@ -121,12 +119,10 @@ pub fn parse(
         .content_length = 0,
     };
 
-    // Accept user defined buffer size for requestline + headers
     // we allocate memory for body if neccesary seperately.
-    var buffer = try allocator.alloc(u8, buffer_size);
+    var buffer: [buffer_size]u8 = undefined;
 
-    const read = try socket.read(buffer);
-    buffer = try allocator.resize(buffer, read);
+    const read = try socket.read(&buffer);
 
     var i: usize = 0;
     while (i < read) {

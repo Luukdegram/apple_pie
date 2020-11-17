@@ -127,6 +127,7 @@ pub const SocketWriter = struct {
         NoSpaceLeft,
         OperationAborted,
         NotOpenForWriting,
+        OperationCancelled,
     } || std.os.SendError;
 
     /// Uses fmt to format the given bytes and writes to the socket
@@ -209,10 +210,7 @@ pub const Response = struct {
             try socket.writeAll("Content-Type: text/plain; charset=utf-8\r\n");
         }
 
-        // if `io_mode` is .blocking, close the connection
-        if (!std.io.is_async) {
-            try socket.writeAll("Connection: Close\r\n");
-        }
+        try socket.writeAll("Connection: keep-alive\r\n");
 
         try socket.writeAll("\r\n");
         try socket.writeAll(body);
