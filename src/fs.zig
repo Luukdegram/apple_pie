@@ -118,6 +118,6 @@ pub fn serveFile(
     const out = response.socket_writer.unbuffered_writer.handle;
     var remaining: u64 = len;
     while (remaining > 0) {
-        remaining -= try std.os.sendfile(out, file.handle, len - remaining, remaining, &[_]std.os.iovec_const{}, &[_]std.os.iovec_const{}, 0);
+        remaining -= try std.os.sendfile(out.handle.inner, file.handle, len - remaining, remaining, &[_]std.os.iovec_const{}, &[_]std.os.iovec_const{}, 0);
     }
 }

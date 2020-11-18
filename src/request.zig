@@ -35,33 +35,43 @@ pub const Request = struct {
         }
     };
 
+    /// HTTP Protocol version
+    pub const Protocol = enum {
+        http1_0,
+        http1_1,
+        http2_0,
+
+        /// Checks the given string and gives its protocol version
+        /// Defaults to HTTP/1.1
+        fn fromString(protocol: []const u8) Protocol {
+            const eql = std.mem.eql;
+            if (eql(u8, protocol, "HTTP/1.1")) return .http1_1;
+            if (eql(u8, protocol, "HTTP/2.0")) return .http2_0;
+            if (eql(u8, protocol, "HTTP/1.0")) return .http1_0;
+
+            return .http1_1;
+        }
+    };
+
     /// GET, POST, PUT, DELETE or PATCH
     method: Method,
     /// Url object, get be used to retrieve path or query parameters
     url: Url,
-    /// HTTP Request headers
-    headers: std.StringHashMap([]const u8),
+    /// HTTP Request headers data.
+    raw_header_data: []const u8,
     /// Body, which can be empty
     body: []const u8,
     /// allocator which is used to free Request's memory
     allocator: *std.mem.Allocator,
     /// Protocol used by the requester, http1.1, http2.0, etc.
-    protocol: []const u8,
-    /// If the buffer was too small to include the body,
-    /// extra memory will be allocated and is freed upon `deinit`
-    allocated_body: bool,
+    protocol: Protocol,
     /// Length of requests body
     content_length: usize,
-
-    /// Frees all memory of a Response, as this loops through each header to remove its memory
-    /// you may consider using an arena allocator to free all memory at once for better perf
-    pub fn deinit(self: *Request) void {
-        var it = self.headers.iterator();
-        self.headers.deinit();
-        if (self.allocated_body) {
-            self.allocator.free(self.body);
-        }
-    }
+    /// True if http protocol version 1.0 or invalid request
+    should_close: bool,
+    /// Hostname the request was sent to. Includes its port. Required for HTTP/1.1
+    /// Cannot be null for user when `protocol` is `http1_1`.
+    host: ?[]const u8,
 };
 
 /// Errors which can occur during the parsing of
@@ -82,6 +92,8 @@ pub const ParseError = error{
     Overflow,
     /// Invalid character when parsing an integer
     InvalidCharacter,
+    /// When the connection has been closed or no more data is available
+    EndOfStream,
 };
 
 /// Parse accepts an `io.InStream`, it will read all data it contains
@@ -91,7 +103,7 @@ pub const ParseError = error{
 /// bigger than this size will be skipped.
 pub fn parse(
     allocator: *std.mem.Allocator,
-    socket: *pike.Socket,
+    reader: anytype,
     comptime buffer_size: usize,
 ) !Request {
     const State = enum {
@@ -113,16 +125,21 @@ pub fn parse(
             .raw_query = "",
         },
         .allocator = allocator,
-        .headers = std.StringHashMap([]const u8).init(allocator),
-        .allocated_body = false,
-        .protocol = "HTTP/1.1",
+        .raw_header_data = undefined,
+        .protocol = .http1_1,
         .content_length = 0,
+        .should_close = false,
+        .host = null,
     };
 
     // we allocate memory for body if neccesary seperately.
     var buffer: [buffer_size]u8 = undefined;
 
-    const read = try socket.read(&buffer);
+    const read = try reader.read(&buffer);
+    if (read == 0) return ParseError.EndOfStream;
+
+    // index for where header data starts to save
+    var header_Start: usize = 0;
 
     var i: usize = 0;
     while (i < read) {
@@ -148,15 +165,17 @@ pub fn parse(
                     return ParseError.InvalidProtocol;
 
                 if (index > 8) return ParseError.InvalidProtocol;
-                request.protocol = buffer[i .. i + index];
-                i += request.protocol.len + 2; // skip \r\n
+                request.protocol = Request.Protocol.fromString(buffer[i .. i + index]);
+                i += index + 2; // skip \r\n
                 state = .header;
+                header_Start = i;
             },
             .header => {
                 if (buffer[i] == '\r') {
                     if (request.content_length == 0) break;
                     state = .body;
                     i += 2; //Skip the \r\n
+                    request.raw_header_data = buffer[header_Start..i];
                     continue;
                 }
                 const index = std.mem.indexOf(u8, buffer[i..], ": ") orelse
@@ -170,11 +189,14 @@ pub fn parse(
 
                 const value = buffer[i .. i + end];
                 i += value.len + 2; //skip \r\n
-                try request.headers.put(key, value);
 
-                if (std.ascii.eqlIgnoreCase(key, "content-length")) {
+                if (request.content_length == 0 and std.ascii.eqlIgnoreCase(key, "content-length")) {
                     request.content_length = try std.fmt.parseInt(usize, value, 10);
+                    continue;
                 }
+
+                if (request.host == null and std.ascii.eqlIgnoreCase(key, "host"))
+                    request.host = value;
             },
             .body => {
                 const length = request.content_length;
@@ -182,16 +204,15 @@ pub fn parse(
                 // if body fit inside the 4kb buffer, we use that,
                 // else allocate more memory
                 if (length <= read - i) {
-                    request.body = buffer[i..];
+                    request.body = buffer[i .. i + length];
                 } else {
                     var body = try allocator.alloc(u8, length);
                     std.mem.copy(u8, body, buffer[i..]);
                     var index: usize = read - i;
                     while (index < body.len) {
-                        index += try socket.read(body[index..]);
+                        index += try reader.read(body[index..]);
                     }
                     request.body = body;
-                    request.allocated_body = true;
                 }
                 break;
             },
@@ -202,7 +223,9 @@ pub fn parse(
 }
 
 test "Basic request parse" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
     const contents = "GET /test?test HTTP/1.1\r\n" ++
         "Host: localhost:8080\r\n" ++
         "User-Agent: insomnia/7.1.1\r\n" ++
@@ -212,11 +235,10 @@ test "Basic request parse" {
         "some body";
 
     const stream = std.io.fixedBufferStream(contents).reader();
-    var request = try parse(allocator, stream, 4096);
-    defer request.deinit();
+    var request = try parse(&arena.allocator, stream, 4096);
 
-    std.testing.expectEqualSlices(u8, "/test", request.url.path);
-    std.testing.expectEqualSlices(u8, "HTTP/1.1", request.protocol);
+    std.testing.expectEqualStrings("/test", request.url.path);
+    std.testing.expectEqual(Request.Protocol.http1_1, request.protocol);
     std.testing.expectEqual(Request.Method.get, request.method);
-    std.testing.expect(request.body.len == "some body".len);
+    std.testing.expectEqualStrings("some body", request.body);
 }

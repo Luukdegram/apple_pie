@@ -1,258 +1,208 @@
-const std = @import("std");
-const req = @import("request.zig");
-const resp = @import("response.zig");
 const pike = @import("pike");
 const zap = @import("zap");
-const testing = std.testing;
+const std = @import("std");
 const net = std.net;
-const Allocator = std.mem.Allocator;
+const log = std.log.scoped(.apple_pie);
+const req = @import("request.zig");
+const resp = @import("response.zig");
 const Request = req.Request;
 const Response = resp.Response;
+const os = std.os;
 
-const log = std.log.scoped(.server);
+/// Alias for an atomic queue of Clients
+const Clients = std.atomic.Queue(*Client);
 
-const Clients = std.atomic.Queue(*Server.Client);
-
-/// Function signature of what the handler function must match
+/// User API function signature of a request handler
 pub const RequestHandler = fn handle(*Response, Request) anyerror!void;
 
-pub const Server = struct {
-    /// The connection clients will connect to
+/// Represents a peer that is connected to our server
+const Client = struct {
+    /// The socket its connected through
     socket: pike.Socket,
-    /// The buffer size we accept for requests, anything bigger than this
-    /// will be manually allocated
-    request_buffer_size: usize = 4096,
-    /// The address the server can be reached on
+    /// The address of the peer
     address: net.Address,
-    /// The function pointer to handle the requests
-    request_handler: RequestHandler,
-    /// Allocator to heap allocate our frames and request data
-    allocator: *Allocator,
-    /// Connections ready to be cleaned up
-    clients: Clients,
-    /// Server's frame for running async
-    frame: @Frame(Server.run),
 
-    const Client = struct {
-        /// Pike's socket we're connected to
-        socket: pike.Socket,
-        /// The actual connection
-        address: net.Address,
-    };
-
-    /// Initializes a new Server with its default values,
-    pub fn init(
-        allocator: *Allocator,
-        address: net.Address,
-        handlerFn: RequestHandler,
-    ) !Server {
-        try pike.init();
-
-        var socket = try pike.Socket.init(
-            std.os.AF_INET,
-            std.os.SOCK_STREAM,
-            std.os.IPPROTO_TCP,
-            0,
-        );
-        try socket.set(.reuse_address, true);
-
-        return Server{
-            .address = address,
-            .request_handler = handlerFn,
-            .allocator = allocator,
-            .socket = socket,
-            .frame = undefined,
-            .clients = Clients.init(),
+    /// Wrapper run function as Zap's runtime enforces us to not return any errors
+    fn run(server: *Server, notifier: *const pike.Notifier, socket: pike.Socket, address: net.Address) void {
+        inlineRun(server, notifier, socket, address) catch |err| {
+            log.err("An error occured while handling a request {}", .{@errorName(err)});
         };
     }
 
-    /// Frees the server resources and closes all connections
-    pub fn deinit(self: *Server) void {
-        defer pike.deinit();
+    /// Inner inlined function that runs the actual client logic
+    /// First yields to the Zap runtime to give control back to frame owner.
+    /// Secondly, creates a new client and sets up its resources (including cleanup)
+    /// Finally, it starts the client loop (keep-alive) and parses the incoming requests
+    /// and then calls the user provided request handler.
+    inline fn inlineRun(
+        server: *Server,
+        notifier: *const pike.Notifier,
+        socket: pike.Socket,
+        address: net.Address,
+    ) !void {
+        zap.runtime.yield();
+
+        var client = Client{ .socket = socket, .address = address };
+        var node = Clients.Node{ .data = &client };
+
+        server.clients.put(&node);
+        defer if (server.clients.remove(&node)) {
+            client.socket.deinit();
+        };
+
+        try client.socket.registerTo(notifier);
+
+        // we allocate the body and allocate a buffer for our response to save syscalls
+        var arena = std.heap.ArenaAllocator.init(server.gpa);
+        defer arena.deinit();
+
+        while (true) {
+            const parsed_request = req.parse(
+                &arena.allocator,
+                client.socket.reader(),
+                4096,
+            ) catch |err| switch (err) {
+                req.ParseError.EndOfStream => return, // not an error, client disconnected
+                else => return err,
+            };
+
+            // create on the stack and allow the user to write to its writer
+            var body = std.ArrayList(u8).init(&arena.allocator);
+
+            var response = Response{
+                .headers = resp.Headers.init(&arena.allocator),
+                .socket_writer = std.io.bufferedWriter(
+                    resp.SocketWriter{ .handle = &client.socket },
+                ),
+                .is_flushed = false,
+                .body = body.writer(),
+            };
+
+            if (parsed_request.protocol == .http1_1 and parsed_request.host == null) {
+                return response.writeHeader(.BadRequest);
+            }
+
+            try @call(.{}, server.handler, .{ &response, parsed_request });
+
+            if (!response.is_flushed) try response.flush();
+        }
+    }
+};
+
+const Server = struct {
+    socket: pike.Socket,
+    clients: Clients,
+    frame: @Frame(run),
+    handler: RequestHandler,
+    gpa: *std.mem.Allocator,
+
+    /// Initializes a new `pike.Socket` and creates a new `Server` object
+    fn init(gpa: *std.mem.Allocator, handler: RequestHandler) !Server {
+        var socket = try pike.Socket.init(os.AF_INET, os.SOCK_STREAM, os.IPPROTO_TCP, 0);
+        errdefer socket.deinit();
+
+        try socket.set(.reuse_address, true);
+
+        return Server{
+            .socket = socket,
+            .clients = Clients.init(),
+            .frame = undefined,
+            .handler = handler,
+            .gpa = gpa,
+        };
+    }
+
+    /// First disconnects its socket to close all connections,
+    /// secondly awaits itself to ensure its finished state and then cleansup
+    /// any remaining clients
+    fn deinit(self: *Server) void {
         self.socket.deinit();
 
         await self.frame;
 
         while (self.clients.get()) |node| {
             node.data.socket.deinit();
-
-            await node.data.frame catch {};
-            self.allocator.destroy(node.data);
         }
     }
 
-    /// Starts listening for connections and serves responses
-    pub fn start(self: *Server) !void {
-        try try zap.runtime.run(.{}, startRuntime, .{self});
-    }
-
-    fn startRuntime(self: *Server) !void {
-        try self.socket.bind(self.address);
+    /// Binds the socket to the address and registers itself to the `notifier`
+    fn start(self: *Server, notifier: *const pike.Notifier, address: net.Address) !void {
+        try self.socket.bind(address);
         try self.socket.listen(128);
+        try self.socket.registerTo(notifier);
 
-        const notifier = try pike.Notifier.init();
-        defer notifier.deinit();
-
-        try self.socket.registerTo(&notifier);
-
-        var shutdown = false;
-        self.frame = async self.run(&notifier);
-
-        var signal_frame = async awaitSignal(&notifier, &shutdown);
-
-        while (!shutdown) {
-            try notifier.poll(10_000);
-        }
-
-        try nosuspend await signal_frame;
+        self.frame = async self.run(notifier);
     }
 
-    /// Main server loop that awaits for new connections and dispatches them
-    fn run(self: *Server, notifier: *const pike.Notifier) callconv(.Async) !void {
-        var retries: usize = 0;
+    /// Enters the listener loop and awaits for new connections
+    /// On new connection spawns a task on Zap's runtime to create a `Client`
+    fn run(self: *Server, notifier: *const pike.Notifier) callconv(.Async) void {
         while (true) {
-            var connection = self.socket.accept() catch |err| switch (err) {
-                error.SocketNotListening => return,
+            var conn = self.socket.accept() catch |err| switch (err) {
+                error.SocketNotListening,
+                error.OperationCancelled,
+                => return,
                 else => {
-                    if (retries > 4) return err;
-                    log.warn("Could not accept connection: {}\nRetrying...", .{err});
-
-                    // sleep for 100 ms extra per retry
-                    std.time.sleep(std.time.ns_per_ms * 100 * (retries + 1));
-                    retries += 1;
+                    log.err("Server - socket.accept(): {}", .{@errorName(err)});
                     continue;
                 },
             };
 
-            zap.runtime.spawn(.{}, runClient, .{ self, notifier, connection.socket, connection.address }) catch |err| {
-                log.err("Failed to spawn client: {}", @errorName(err));
+            zap.runtime.spawn(.{}, Client.run, .{ self, notifier, conn.socket, conn.address }) catch |err| {
+                log.err("Server - runtime.spawn(): {}", .{@errorName(err)});
                 continue;
             };
         }
     }
-
-    /// Awaits for the notifier to trigger an interrupt/quit signal
-    fn awaitSignal(notifier: *const pike.Notifier, shutdown: *bool) !void {
-        // ensure that even in case of error, we shutdown
-        defer shutdown.* = true;
-
-        var signal = try pike.Signal.init(.{ .interrupt = true });
-        defer signal.deinit();
-
-        try signal.wait();
-    }
 };
 
-/// Starts a new server on the given `address` and listens for new connections.
-/// Each request will call `request_handler` to serve the response to the requester.
-pub fn listenAndServe(
-    allocator: *Allocator,
-    address: net.Address,
-    request_handler: RequestHandler,
-) !void {
-    var server = try Server.init(allocator, address, request_handler);
-    try server.start();
+/// Creates a new server and starts listening for new connections.
+/// On connection, parses its request and sends it to the given `handler`
+pub fn listenAndServe(gpa: *std.mem.Allocator, address: net.Address, handler: RequestHandler) !void {
+    try pike.init();
+    defer pike.deinit();
+
+    var signal = try pike.Signal.init(.{ .interrupt = true });
+    try try zap.runtime.run(.{}, serve, .{ gpa, &signal, address, handler });
 }
 
-fn runClient(
-    server: *Server,
-    notifier: *const pike.Notifier,
-    socket: pike.Socket,
-    address: net.Address,
-) void {
-    serveRequest(server, notifier, socket, address) catch |err| {
-        log.err("Unable to run client {}", @errorName(err));
-    };
-}
+/// Creates event listener, notifier and registers the signal handler and event handler to the notifier
+/// Finally, creates a new server object and starts listening to new connections
+fn serve(gpa: *std.mem.Allocator, signal: *pike.Signal, address: net.Address, handler: RequestHandler) !void {
+    defer signal.deinit();
 
-/// Handles a request and returns a response based on the given handler function
-fn serveRequest(
-    server: *Server,
-    notifier: *const pike.Notifier,
-    socket: pike.Socket,
-    address: net.Address,
-) !void {
-    zap.runtime.yield();
+    var event = try pike.Event.init();
+    defer event.deinit();
 
-    var client = Server.Client{ .socket = socket, .address = address };
-    var node = Clients.Node{ .data = client };
+    const notifier = try pike.Notifier.init();
+    defer notifier.deinit();
 
-    server.clients.put(&node);
+    try signal.registerTo(&notifier);
+    try event.registerTo(&notifier);
 
-    // free up client resources
-    defer if (server.clients.remove(&node)) {
-        client.socket.deinit();
-    };
+    var stopped = false;
 
-    try client.socket.registerTo(notifier);
+    var server = try Server.init(gpa, handler);
+    defer server.deinit();
 
-    // keep-alive by default, we will break out if Connection: close is set
-    // or if `io_mode` is not set to '.evented'
-    while (true) {
-        // use an arena allocator to free all memory at once as it performs better than
-        // freeing everything individually.
-        var arena = std.heap.ArenaAllocator.init(server.allocator);
-        defer arena.deinit();
+    try server.start(&notifier, address);
 
-        // create on the stack and allow the user to write to its writer
-        var body = std.ArrayList(u8).init(&arena.allocator);
-        // 'var' as we allocate it on the stack of the loop and we need to modify it
-        var response = Response{
-            .headers = resp.Headers.init(&arena.allocator),
-            .socket_writer = std.io.bufferedWriter(
-                resp.SocketWriter{ .handle = &client.socket },
-            ),
-            .is_flushed = false,
-            .body = body.writer(),
-        };
-
-        // parse the HTTP Request and if successful, call the handler function asynchronous
-        var request = req.parse(
-            &arena.allocator,
-            &client.socket,
-            server.request_buffer_size,
-        );
-
-        if (request) |parsed_request| {
-            @call(.{}, server.request_handler, .{ &response, parsed_request }) catch |err| {
-                switch (err) {
-                    std.os.SendError.BrokenPipe => break,
-                    else => {
-                        log.err("Unexpected error: {}\n", .{err});
-                        break;
-                    },
-                }
-            };
-
-            if (!response.is_flushed) {
-                try response.flush();
-            }
-
-            // if the client requests to close the connection
-            if (parsed_request.headers.contains("Connection")) {
-                const header = parsed_request.headers.get("Connection").?;
-                if (std.ascii.eqlIgnoreCase(header, "close")) {
-                    break;
-                }
-            }
-
-            // if the handler function requests to close the connection
-            if (response.headers.contains("Connection")) {
-                if (std.ascii.eqlIgnoreCase(response.headers.get("Connection").?, "close")) {
-                    break;
-                }
-            }
-
-            // if http version 1.0, no persistant connection is supported, therefore end connection
-            if (std.mem.eql(u8, "HTTP/1.0", parsed_request.protocol)) break;
-        } else |err| {
-            try response.headers.put("Content-Type", "text/plain;charset=utf-8");
-
-            response.status_code = .BadRequest;
-            try response.writer().writeAll("400 Bad Request");
-            try response.flush();
-            log.debug("An error occured parsing the request: {}\n", .{err});
-            break;
-        }
+    var frame = async awaitSignal(signal, &event, &stopped, &server);
+    while (!stopped) {
+        try notifier.poll(1_000_000);
     }
+
+    try nosuspend await frame;
+
+    defer log.info("Apple pie has been shutdown", .{});
+}
+
+/// Awaits for a signal to be provided for shutdown
+fn awaitSignal(signal: *pike.Signal, event: *pike.Event, stopped: *bool, server: *Server) !void {
+    defer {
+        stopped.* = true;
+        event.post() catch {};
+    }
+
+    try signal.wait();
 }

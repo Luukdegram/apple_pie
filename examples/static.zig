@@ -12,7 +12,7 @@ pub fn main() !void {
     try file_server.init(allocator, .{ .dir_path = "src", .base_path = "fs" });
     defer file_server.deinit();
 
-    try http.server.listenAndServe(
+    try http.listenAndServe(
         allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),
         file_server.serve,

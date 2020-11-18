@@ -1,13 +1,11 @@
 const std = @import("std");
 const http = @import("apple_pie");
 
-pub const io_mode = .evented;
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    try http.server.listenAndServe(
+    try http.listenAndServe(
         &gpa.allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),
         index,
@@ -16,6 +14,7 @@ pub fn main() !void {
 
 // Go to "localhost:8080?name=<your_name>"
 fn index(response: *http.Response, request: http.Request) !void {
+    try response.headers.put("Content-Type", "text/html");
     const html = @embedFile("index.html");
     const template = http.Template(html);
 

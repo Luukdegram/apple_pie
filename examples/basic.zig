@@ -9,13 +9,11 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    // try http.server.listenAndServe(
-    //     &gpa.allocator,
-    //     try std.net.Address.parseIp("127.0.0.1", 8080),
-    //     index,
-    // );
-
-    try http.Server2.listenAndServe(&gpa.allocator, index);
+    try http.listenAndServe(
+        &gpa.allocator,
+        try std.net.Address.parseIp("0.0.0.0", 8080),
+        index,
+    );
 }
 
 fn index(response: *http.Response, request: http.Request) !void {
