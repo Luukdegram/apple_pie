@@ -165,9 +165,11 @@ pub const Response = struct {
 
     pub const Error = SocketWriter.Error || error{OutOfMemory};
 
+    pub const Writer = std.io.Writer(*Response, Error, write);
+
     /// Returns a writer interface, any data written to the writer
     /// will be appended to the response's body
-    pub fn writer(self: *Response) std.io.Writer(*Response, Error, write) {
+    pub fn writer(self: *Response) Writer {
         return .{ .context = self };
     }
 
@@ -177,6 +179,7 @@ pub const Response = struct {
     }
 
     /// Sends a status code with an empty body and the current headers to the client
+    /// Note that this will complete the response and any further writes are illegal.
     pub fn writeHeader(self: *Response, status_code: StatusCode) Error!void {
         self.status_code = status_code;
         try self.flush();
@@ -200,7 +203,7 @@ pub const Response = struct {
         }
 
         // If user has not set content-length, we add it calculated by the length of the body
-        if (!self.headers.contains("Content-Length")) {
+        if (body.len > 0 and !self.headers.contains("Content-Length")) {
             try socket.print("Content-Length: {}\r\n", .{body.len});
         }
 
@@ -213,8 +216,8 @@ pub const Response = struct {
         try socket.writeAll("Connection: keep-alive\r\n");
 
         try socket.writeAll("\r\n");
-        try socket.writeAll(body);
-        try self.socket_writer.flush();
+        if (body.len > 0) try socket.writeAll(body);
+        try self.socket_writer.flush(); // ensure everything is written
     }
 
     /// Sends a `404 - Resource not found` response

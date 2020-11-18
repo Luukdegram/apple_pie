@@ -13,7 +13,7 @@ const os = std.os;
 const Clients = std.atomic.Queue(*Client);
 
 /// User API function signature of a request handler
-pub const RequestHandler = fn handle(*Response, Request) anyerror!void;
+pub const RequestHandler = fn handle(*Response, Request) callconv(.Async) anyerror!void;
 
 /// Represents a peer that is connected to our server
 const Client = struct {
@@ -82,9 +82,14 @@ const Client = struct {
                 return response.writeHeader(.BadRequest);
             }
 
-            try @call(.{}, server.handler, .{ &response, parsed_request });
+            // async runtime functions require a stack
+            // provides a 100kb stack
+            var stack: [100 * 1024]u8 align(16) = undefined;
+            try nosuspend await @asyncCall(&stack, {}, server.handler, .{ &response, parsed_request });
 
             if (!response.is_flushed) try response.flush();
+
+            if (parsed_request.should_close) return; // close connection
         }
     }
 };
@@ -95,6 +100,7 @@ const Server = struct {
     frame: @Frame(run),
     handler: RequestHandler,
     gpa: *std.mem.Allocator,
+    frame_stack: []align(16) u8,
 
     /// Initializes a new `pike.Socket` and creates a new `Server` object
     fn init(gpa: *std.mem.Allocator, handler: RequestHandler) !Server {
@@ -109,6 +115,7 @@ const Server = struct {
             .frame = undefined,
             .handler = handler,
             .gpa = gpa,
+            .frame_stack = try gpa.allocAdvanced(u8, 16, @frameSize(handler), .exact),
         };
     }
 

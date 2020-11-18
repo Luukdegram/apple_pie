@@ -195,6 +195,11 @@ pub fn parse(
                     continue;
                 }
 
+                if (request.protocol == .http1_1 and std.ascii.eqlIgnoreCase(key, "connection")) {
+                    if (std.ascii.eqlIgnoreCase(value, "close")) request.should_close = true;
+                    continue;
+                }
+
                 if (request.host == null and std.ascii.eqlIgnoreCase(key, "host"))
                     request.host = value;
             },
