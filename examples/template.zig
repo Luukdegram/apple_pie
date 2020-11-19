@@ -1,6 +1,10 @@
 const std = @import("std");
 const http = @import("apple_pie");
 
+pub const pike_dispatch = http.dispatch;
+pub const pike_batch = http.batch;
+pub const pike_task = http.task;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

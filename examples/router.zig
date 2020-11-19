@@ -3,6 +3,10 @@ const http = @import("apple_pie");
 const fs = http.FileServer;
 const router = http.router;
 
+pub const pike_dispatch = http.dispatch;
+pub const pike_batch = http.batch;
+pub const pike_task = http.task;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
