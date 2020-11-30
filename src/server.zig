@@ -100,7 +100,6 @@ const Server = struct {
     frame: @Frame(run),
     handler: RequestHandler,
     gpa: *std.mem.Allocator,
-    frame_stack: []align(16) u8,
 
     /// Initializes a new `pike.Socket` and creates a new `Server` object
     fn init(gpa: *std.mem.Allocator, handler: RequestHandler) !Server {
@@ -115,7 +114,6 @@ const Server = struct {
             .frame = undefined,
             .handler = handler,
             .gpa = gpa,
-            .frame_stack = try gpa.allocAdvanced(u8, 16, @frameSize(handler), .exact),
         };
     }
 
