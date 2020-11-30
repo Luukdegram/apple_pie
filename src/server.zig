@@ -34,7 +34,7 @@ const Client = struct {
     /// Secondly, creates a new client and sets up its resources (including cleanup)
     /// Finally, it starts the client loop (keep-alive) and parses the incoming requests
     /// and then calls the user provided request handler.
-    inline fn inlineRun(
+    fn inlineRun(
         server: *Server,
         notifier: *const pike.Notifier,
         socket: pike.Socket,

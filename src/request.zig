@@ -53,6 +53,12 @@ pub const Request = struct {
         }
     };
 
+    /// Represents an HTTP Header
+    pub const Header = struct {
+        key: []const u8,
+        value: []const u8,
+    };
+
     /// GET, POST, PUT, DELETE or PATCH
     method: Method,
     /// Url object, get be used to retrieve path or query parameters
@@ -61,8 +67,6 @@ pub const Request = struct {
     raw_header_data: []const u8,
     /// Body, which can be empty
     body: []const u8,
-    /// allocator which is used to free Request's memory
-    allocator: *std.mem.Allocator,
     /// Protocol used by the requester, http1.1, http2.0, etc.
     protocol: Protocol,
     /// Length of requests body
@@ -72,6 +76,45 @@ pub const Request = struct {
     /// Hostname the request was sent to. Includes its port. Required for HTTP/1.1
     /// Cannot be null for user when `protocol` is `http1_1`.
     host: ?[]const u8,
+
+    /// Iterator to iterate through headers
+    const Iterator = struct {
+        slice: []const u8,
+        index: usize,
+
+        /// Searches for the next header.
+        /// Parsing cannot be failed as that would have been caught by `parse()`
+        pub fn next(self: *Iterator) ?Header {
+            if (self.index >= self.slice.len) return null;
+
+            var header: Header = undefined;
+            var start = self.index;
+            while (self.index < self.slice.len) : (self.index += 1) {
+                const c = self.slice[self.index];
+                if (c == ' ') {
+                    header.key = self.slice[start .. self.index - 1];
+                    start = self.index + 1;
+                }
+                if (c == '\n') {
+                    header.value = self.slice[start .. self.index - 1];
+                    self.index += 1;
+                    return header;
+                }
+            }
+
+            return null;
+        }
+    };
+
+    /// Creates an iterator to retrieve all headers
+    /// As the data is known, this does not require any allocations
+    /// If all headers needs to be known at once, use `headers()`.
+    pub fn iterator(self: Request) Iterator {
+        return Iterator{
+            .slice = self.raw_header_data,
+            .index = 0,
+        };
+    }
 };
 
 /// Errors which can occur during the parsing of
@@ -124,7 +167,6 @@ pub fn parse(
             .raw_path = "/",
             .raw_query = "",
         },
-        .allocator = allocator,
         .raw_header_data = undefined,
         .protocol = .http1_1,
         .content_length = 0,
@@ -246,4 +288,26 @@ test "Basic request parse" {
     std.testing.expectEqual(Request.Protocol.http1_1, request.protocol);
     std.testing.expectEqual(Request.Method.get, request.method);
     std.testing.expectEqualStrings("some body", request.body);
+}
+
+test "Request iterator" {
+    const headers = "User-Agent: ApplePieClient/1\r\n" ++
+        "Accept: application/json\r\n" ++
+        "content-Length: 0\r\n";
+
+    var it = Request.Iterator{
+        .slice = headers,
+        .index = 0,
+    };
+
+    const header1 = it.next().?;
+    const header2 = it.next().?;
+    const header3 = it.next().?;
+    const header4 = it.next();
+
+    std.testing.expectEqualStrings("User-Agent", header1.key);
+    std.testing.expectEqualStrings("ApplePieClient/1", header1.value);
+    std.testing.expectEqualStrings("Accept", header2.key);
+    std.testing.expectEqualStrings("content-Length", header3.key);
+    std.testing.expectEqual(@as(?Request.Header, null), header4);
 }
