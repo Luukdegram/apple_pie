@@ -59,6 +59,9 @@ pub const Request = struct {
         value: []const u8,
     };
 
+    /// Alias to StringHashMapUnmanaged([]const u8)
+    pub const Headers = std.StringHashMapUnmanaged([]const u8);
+
     /// GET, POST, PUT, DELETE or PATCH
     method: Method,
     /// Url object, get be used to retrieve path or query parameters
@@ -87,17 +90,20 @@ pub const Request = struct {
         pub fn next(self: *Iterator) ?Header {
             if (self.index >= self.slice.len) return null;
 
+            var state: enum { key, value } = .key;
+
             var header: Header = undefined;
             var start = self.index;
             while (self.index < self.slice.len) : (self.index += 1) {
                 const c = self.slice[self.index];
-                if (c == ' ') {
-                    header.key = self.slice[start .. self.index - 1];
-                    start = self.index + 1;
+                if (state == .key and c == ':') {
+                    header.key = self.slice[start..self.index];
+                    start = self.index + 2;
+                    state = .value;
                 }
-                if (c == '\n') {
-                    header.value = self.slice[start .. self.index - 1];
-                    self.index += 1;
+                if (state == .value and c == '\r') {
+                    header.value = self.slice[start..self.index];
+                    self.index += 2;
                     return header;
                 }
             }
@@ -111,9 +117,23 @@ pub const Request = struct {
     /// If all headers needs to be known at once, use `headers()`.
     pub fn iterator(self: Request) Iterator {
         return Iterator{
-            .slice = self.raw_header_data,
+            .slice = self.raw_header_data[0..],
             .index = 0,
         };
+    }
+
+    /// Creates an unmanaged Hashmap from the request headers, memory is owned by caller
+    /// Every header key and value will be allocated for the map and must therefore be freed
+    /// manually as well.
+    pub fn headers(self: Request, allocator: *std.mem.Allocator) !Headers {
+        var map = Headers{};
+
+        var it = self.iterator();
+        while (it.next()) |header| {
+            try map.put(allocator, try allocator.dupe(u8, header.key), try allocator.dupe(u8, header.value));
+        }
+
+        return map;
     }
 };
 
@@ -217,7 +237,7 @@ pub fn parse(
                     if (request.content_length == 0) break;
                     state = .body;
                     i += 2; //Skip the \r\n
-                    request.raw_header_data = buffer[header_Start..i];
+                    request.raw_header_data = buffer[header_Start..i]; // remove the \r\n
                     continue;
                 }
                 const index = std.mem.indexOf(u8, buffer[i..], ": ") orelse
@@ -288,6 +308,19 @@ test "Basic request parse" {
     std.testing.expectEqual(Request.Protocol.http1_1, request.protocol);
     std.testing.expectEqual(Request.Method.get, request.method);
     std.testing.expectEqualStrings("some body", request.body);
+
+    var headers = try request.headers(std.testing.allocator);
+    defer {
+        var it = headers.iterator();
+        while (it.next()) |header| {
+            std.testing.allocator.free(header.key);
+            std.testing.allocator.free(header.value);
+        }
+        headers.deinit(std.testing.allocator);
+    }
+
+    std.testing.expect(headers.contains("Host"));
+    std.testing.expect(headers.contains("Accept"));
 }
 
 test "Request iterator" {
@@ -299,7 +332,6 @@ test "Request iterator" {
         .slice = headers,
         .index = 0,
     };
-
     const header1 = it.next().?;
     const header2 = it.next().?;
     const header3 = it.next().?;
