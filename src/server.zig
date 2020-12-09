@@ -182,7 +182,6 @@ fn serve(gpa: *std.mem.Allocator, signal: *pike.Signal, address: net.Address, ha
     const notifier = try pike.Notifier.init();
     defer notifier.deinit();
 
-    try signal.registerTo(&notifier);
     try event.registerTo(&notifier);
 
     var stopped = false;
