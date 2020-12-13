@@ -159,7 +159,7 @@ pub const ParseError = error{
     EndOfStream,
 };
 
-/// Parse accepts an `io.InStream`, it will read all data it contains
+/// Parse accepts an `io.Reader`, it will read all data it contains
 /// and tries to parse it into a `Request`. Can return `ParseError` if data is corrupt
 /// The memory of the `Request` is owned by the caller and can be freed by using deinit()
 /// `buffer_size` is the size that is allocated to parse the request line and headers, any headers
@@ -195,9 +195,8 @@ pub fn parse(
     };
 
     // we allocate memory for body if neccesary seperately.
-    var buffer: [buffer_size]u8 = undefined;
-
-    const read = try reader.read(&buffer);
+    const buffer = try allocator.alloc(u8, buffer_size);
+    const read = try reader.read(buffer);
     if (read == 0) return ParseError.EndOfStream;
 
     // index for where header data starts to save

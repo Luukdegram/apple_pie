@@ -25,7 +25,7 @@ const Client = struct {
     /// Wrapper run function as Zap's runtime enforces us to not return any errors
     fn run(server: *Server, notifier: *const pike.Notifier, socket: pike.Socket, address: net.Address) void {
         inlineRun(server, notifier, socket, address) catch |err| {
-            log.err("An error occured while handling a request {}", .{@errorName(err)});
+            log.err("An error occured while handling a request: {}", .{@errorName(err)});
         };
     }
 
@@ -56,21 +56,27 @@ const Client = struct {
         var arena = std.heap.ArenaAllocator.init(server.gpa);
         defer arena.deinit();
 
+        // max byte size per stack before we allocate more memory
+        const buffer_size: usize = 4096;
+        var stack_allocator = std.heap.stackFallback(buffer_size, &arena.allocator);
+
         while (true) {
             const parsed_request = req.parse(
-                &arena.allocator,
+                stack_allocator.get(),
                 client.socket.reader(),
-                4096,
+                buffer_size,
             ) catch |err| switch (err) {
-                req.ParseError.EndOfStream => return, // not an error, client disconnected
+                // not an error, client disconnected
+                req.ParseError.EndOfStream => return,
                 else => return err,
             };
 
             // create on the stack and allow the user to write to its writer
-            var body = std.ArrayList(u8).init(&arena.allocator);
+            var body = std.ArrayList(u8).init(stack_allocator.get());
+            defer body.deinit();
 
             var response = Response{
-                .headers = resp.Headers.init(&arena.allocator),
+                .headers = resp.Headers.init(stack_allocator.get()),
                 .socket_writer = std.io.bufferedWriter(
                     resp.SocketWriter{ .handle = &client.socket },
                 ),
