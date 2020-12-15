@@ -64,7 +64,6 @@ pub fn Trie(comptime T: type) type {
                 for (current.childs) |child| {
                     if (std.mem.eql(u8, child.path, component)) {
                         current = child;
-                        it.index = 0;
                         continue :loop;
                     }
                 }
@@ -86,7 +85,7 @@ pub fn Trie(comptime T: type) type {
                 }
 
                 var childs: [current.childs.len + 1]*Node = undefined;
-                std.mem.copy(*Node, &childs, current.childs ++ &[_]*Node{&new_node});
+                std.mem.copy(*Node, &childs, current.childs ++ [_]*Node{&new_node});
                 current.childs = &childs;
                 current = &new_node;
             }
@@ -171,4 +170,28 @@ test "Insert and retrieve" {
     std.testing.expectEqualStrings("5", res.with_params.params[0].value);
     std.testing.expectEqualStrings("25", res3.with_params.params[0].value);
     std.testing.expectEqualStrings("20", res3.with_params.params[1].value);
+}
+
+test "Insert and retrieve paths with same prefix" {
+    comptime var trie = Trie(u32){};
+    comptime trie.insert("/api", 1);
+    comptime trie.insert("/api/users", 2);
+    comptime trie.insert("/api/events", 3);
+    comptime trie.insert("/api/events/:id", 4);
+
+    const res = trie.get("/api");
+    const res2 = trie.get("/api/users");
+    const res3 = trie.get("/api/events");
+    const res4 = trie.get("/api/events/1337");
+    const res5 = trie.get("/foo");
+    const res6 = trie.get("/api/api/events");
+
+    std.testing.expectEqual(@as(u32, 1), res.static);
+    std.testing.expectEqual(@as(u32, 2), res2.static);
+    std.testing.expectEqual(@as(u32, 3), res3.static);
+    std.testing.expectEqual(@as(u32, 4), res4.with_params.data);
+    std.testing.expect(res5 == .none);
+    std.testing.expect(res6 == .none);
+
+    std.testing.expectEqualStrings("1337", res4.with_params.params[0].value);
 }
