@@ -3,6 +3,7 @@ const std = @import("std");
 pub const MimeType = enum {
     js,
     html,
+    css,
     png,
     jpeg,
     text,
@@ -12,6 +13,7 @@ pub const MimeType = enum {
     pub const extensions = &[_][]const u8{
         ".js",
         ".html",
+        ".css",
         ".png",
         ".jpeg",
         ".txt",
@@ -22,6 +24,7 @@ pub const MimeType = enum {
         return switch (self) {
             .js => "application/javascript",
             .html => "text/html",
+            .css => "text/css",
             .png => "image/png",
             .jpeg => "image/jpeg",
             .text, .unknown => "text/plain",
