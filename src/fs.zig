@@ -61,7 +61,10 @@ pub fn serve(response: *Response, request: Request) (Response.Error || error{Not
     };
     defer file.close();
 
-    try serveFile(response, request.url.path, file);
+    serveFile(response, request.url.path, file) catch |err| switch (err) {
+        error.NotAFile => return response.notFound(),
+        else => return err,
+    };
 }
 
 /// Notifies the client with a Moved Permanently header
