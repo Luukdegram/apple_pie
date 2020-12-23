@@ -2,6 +2,7 @@ const std = @import("std");
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const MimeType = @import("mime_type.zig").MimeType;
+const url = @import("url.zig");
 const Allocator = std.mem.Allocator;
 const fs = std.fs;
 
@@ -38,18 +39,22 @@ pub fn deinit() void {
 pub fn serve(response: *Response, request: Request) (Response.Error || error{NotAFile} || std.os.SendFileError)!void {
     std.debug.assert(initialized);
     const index = "index.html";
-    var path = request.url.path[1..];
+    var path = url.sanitize(request.url.path);
 
     if (std.mem.endsWith(u8, path, index)) {
         return localRedirect(response, request, "./", alloc);
     }
 
     if (base_path) |b_path| {
-        if (std.mem.startsWith(u8, path, b_path)) {
-            path = path[b_path.len..];
+        if (std.mem.startsWith(u8, path[1..], b_path)) {
+            path = path[b_path.len + 1 ..];
             if (path.len > 0 and path[0] == '/') path = path[1..];
         }
-    }
+    } else if (path[0] == '/') path = path[1..];
+
+    // if the sanitized path starts with '..' it means it goes up from the root
+    // and therefore has access to outside root.
+    if (std.mem.startsWith(u8, path, "..")) return response.notFound();
 
     var file = dir.openFile(path, .{}) catch |_| {
         return response.notFound();
