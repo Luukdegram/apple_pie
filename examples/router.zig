@@ -35,7 +35,7 @@ fn index(response: *http.Response, request: http.Request) !void {
 
 /// Shows "Hello {name}" where {name} is /hello/:name
 fn hello(resp: *http.Response, req: http.Request, name: []const u8) !void {
-    try resp.writer().print("Hello {}\n", .{name});
+    try resp.writer().print("Hello {s}\n", .{name});
 }
 
 /// Serves a file
@@ -48,7 +48,7 @@ fn messages(resp: *http.Response, req: http.Request, args: struct {
     post: usize,
     message: []const u8,
 }) !void {
-    try resp.writer().print("Post {}, message: '{}'\n", .{
+    try resp.writer().print("Post {d}, message: '{s}'\n", .{
         args.post,
         args.message,
     });

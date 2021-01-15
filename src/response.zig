@@ -195,16 +195,16 @@ pub const Response = struct {
         var socket = self.socket_writer.writer();
 
         // Print the status line, we only support HTTP/1.1 for now
-        try socket.print("HTTP/1.1 {} {}\r\n", .{ @enumToInt(self.status_code), self.status_code.toString() });
+        try socket.print("HTTP/1.1 {d} {s}\r\n", .{ @enumToInt(self.status_code), self.status_code.toString() });
 
         // write headers
         for (self.headers.items()) |header| {
-            try socket.print("{}: {}\r\n", .{ header.key, header.value });
+            try socket.print("{s}: {s}\r\n", .{ header.key, header.value });
         }
 
         // If user has not set content-length, we add it calculated by the length of the body
         if (body.len > 0 and !self.headers.contains("Content-Length")) {
-            try socket.print("Content-Length: {}\r\n", .{body.len});
+            try socket.print("Content-Length: {d}\r\n", .{body.len});
         }
 
         // set default Content-Type.

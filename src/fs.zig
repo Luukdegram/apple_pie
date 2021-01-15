@@ -109,11 +109,11 @@ pub fn serveFile(
 
     //write headers
     for (response.headers.items()) |header| {
-        try stream.print("{}: {}\r\n", .{ header.key, header.value });
+        try stream.print("{s}: {s}\r\n", .{ header.key, header.value });
     }
 
-    try stream.print("Content-Length: {}\r\n", .{len});
-    try stream.print("Content-Type: {}\r\n", .{MimeType.fromFileName(file_name).toType()});
+    try stream.print("Content-Length: {d}\r\n", .{len});
+    try stream.print("Content-Type: {s}\r\n", .{MimeType.fromFileName(file_name).toType()});
 
     if (!std.io.is_async) {
         try stream.writeAll("Connection: Close\r\n");
