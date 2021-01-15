@@ -48,4 +48,4 @@ To build any of the examples, use the following:
 ```
 zig build example -Dexample=<example_name>
 ```
-
+it will appear in `zig-cache/bin/example_name`

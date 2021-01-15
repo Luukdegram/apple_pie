@@ -34,25 +34,24 @@ pub fn build(b: *Builder) void {
 
     // example
     {
-        const opt = b.option([]const u8, "example", "The example to build & run") orelse "";
+        var opt = b.option([]const u8, "example", "The example to build & run") orelse "basic";
         const example_file = blk: {
             var file: []const u8 = undefined;
-            file = "examples/basic.zig";
 
             if (std.mem.eql(u8, opt, "router"))
-                file = "examples/router.zig";
+                break :blk "examples/router.zig";
 
             if (std.mem.eql(u8, opt, "static"))
-                file = "examples/static.zig";
+                break :blk "examples/static.zig";
 
             if (std.mem.eql(u8, opt, "template"))
-                file = "examples/template.zig";
+                break :blk "examples/template.zig";
 
-            break :blk file;
+            break :blk "examples/basic.zig";
         };
 
         // Allows for running the example
-        var example = b.addExecutable("example", example_file);
+        var example = b.addExecutable(opt, example_file);
         example.addPackage(.{
             .name = "apple_pie",
             .path = "src/apple_pie.zig",
