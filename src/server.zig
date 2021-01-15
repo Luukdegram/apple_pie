@@ -72,17 +72,18 @@ const Client = struct {
             };
 
             // create on the stack and allow the user to write to its writer
-            var body = std.ArrayList(u8).init(stack_allocator.get());
+            var body = std.ArrayList(u8).init(server.gpa);
             defer body.deinit();
 
             var response = Response{
-                .headers = resp.Headers.init(stack_allocator.get()),
+                .headers = resp.Headers.init(server.gpa),
                 .socket_writer = std.io.bufferedWriter(
                     resp.SocketWriter{ .handle = &client.socket },
                 ),
                 .is_flushed = false,
                 .body = body.writer(),
             };
+            defer response.headers.deinit();
 
             if (parsed_request.protocol == .http1_1 and parsed_request.host == null) {
                 return response.writeHeader(.BadRequest);
@@ -96,6 +97,8 @@ const Client = struct {
             if (!response.is_flushed) try response.flush();
 
             if (parsed_request.should_close) return; // close connection
+
+            if (std.builtin.single_threaded) return; // No keep-alive for single-threaded builds
         }
     }
 };
