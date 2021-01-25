@@ -114,7 +114,7 @@ pub fn Trie(comptime T: type) type {
 
                             var result = Result{
                                 .with_params = .{
-                                    .data = current.data.?,
+                                    .data = child.data.?,
                                     .params = undefined,
                                     .param_count = param_count,
                                 },
@@ -156,20 +156,24 @@ test "Insert and retrieve" {
     comptime trie.insert("/posts/:id", 1);
     comptime trie.insert("/messages/*", 2);
     comptime trie.insert("/topics/:id/messages/:msg", 3);
+    comptime trie.insert("/topics/:id/*", 4);
 
     const res = trie.get("/posts/5");
     const res2 = trie.get("/messages/bla");
     const res3 = trie.get("/topics/25/messages/20");
     const res4 = trie.get("/foo");
+    const res5 = trie.get("/topics/5/foo");
 
     std.testing.expectEqual(@as(u32, 1), res.with_params.data);
     std.testing.expectEqual(@as(u32, 2), res2.static);
     std.testing.expectEqual(@as(u32, 3), res3.with_params.data);
     std.testing.expect(res4 == .none);
+    std.testing.expectEqual(@as(u32, 4), res5.with_params.data);
 
     std.testing.expectEqualStrings("5", res.with_params.params[0].value);
     std.testing.expectEqualStrings("25", res3.with_params.params[0].value);
     std.testing.expectEqualStrings("20", res3.with_params.params[1].value);
+    std.testing.expectEqualStrings("5", res5.with_params.params[0].value);
 }
 
 test "Insert and retrieve paths with same prefix" {
