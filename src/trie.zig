@@ -88,6 +88,8 @@ pub fn Trie(comptime T: type) type {
                 std.mem.copy(*Node, &childs, current.childs ++ [_]*Node{&new_node});
                 current.childs = &childs;
                 current = &new_node;
+
+                if (current.label == .all) break;
             }
             current.data = data;
         }
@@ -104,13 +106,14 @@ pub fn Trie(comptime T: type) type {
             var param_count: usize = 0;
             var current = &self.root;
             var it = std.mem.split(path[1..], "/");
+            var index: usize = 0;
 
             loop: while (it.next()) |component| {
+                index += component.len + 1;
                 for (current.childs) |child| {
                     if (std.mem.eql(u8, component, child.path) or child.label == .param or child.label == .all) {
                         if (child.label == .all) {
                             if (child.data == null) return .none;
-                            if (param_count == 0) return .{ .static = child.data.? };
 
                             var result = Result{
                                 .with_params = .{
@@ -120,6 +123,9 @@ pub fn Trie(comptime T: type) type {
                                 },
                             };
 
+                            // Add the wildcard as param as well
+                            // returns full result from wildcard onwards
+                            params[param_count] = .{ .key = child.path, .value = path[index - component.len ..] };
                             std.mem.copy(Entry, &result.with_params.params, &params);
                             return result;
                         }
@@ -157,23 +163,33 @@ test "Insert and retrieve" {
     comptime trie.insert("/messages/*", 2);
     comptime trie.insert("/topics/:id/messages/:msg", 3);
     comptime trie.insert("/topics/:id/*", 4);
+    comptime trie.insert("/bar", 5);
 
     const res = trie.get("/posts/5");
     const res2 = trie.get("/messages/bla");
+    const res2a = trie.get("/messages/bla/bla");
     const res3 = trie.get("/topics/25/messages/20");
     const res4 = trie.get("/foo");
     const res5 = trie.get("/topics/5/foo");
+    const res6 = trie.get("/topics/5/");
+    const res7 = trie.get("/bar");
 
     std.testing.expectEqual(@as(u32, 1), res.with_params.data);
-    std.testing.expectEqual(@as(u32, 2), res2.static);
+    std.testing.expectEqual(@as(u32, 2), res2.with_params.data);
+    std.testing.expectEqual(@as(u32, 2), res2a.with_params.data);
     std.testing.expectEqual(@as(u32, 3), res3.with_params.data);
     std.testing.expect(res4 == .none);
     std.testing.expectEqual(@as(u32, 4), res5.with_params.data);
+    std.testing.expectEqual(@as(u32, 4), res6.with_params.data);
+    std.testing.expectEqual(@as(u32, 5), res7.static);
 
     std.testing.expectEqualStrings("5", res.with_params.params[0].value);
+    std.testing.expectEqualStrings("bla", res2.with_params.params[0].value);
+    std.testing.expectEqualStrings("bla/bla", res2a.with_params.params[0].value);
     std.testing.expectEqualStrings("25", res3.with_params.params[0].value);
     std.testing.expectEqualStrings("20", res3.with_params.params[1].value);
     std.testing.expectEqualStrings("5", res5.with_params.params[0].value);
+    std.testing.expectEqualStrings("foo", res5.with_params.params[1].value);
 }
 
 test "Insert and retrieve paths with same prefix" {
