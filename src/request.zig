@@ -1,6 +1,5 @@
 const std = @import("std");
 const Url = @import("url.zig").Url;
-const pike = @import("pike");
 
 /// Represents a request made by a client
 pub const Request = struct {

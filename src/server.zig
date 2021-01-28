@@ -6,6 +6,7 @@ const resp = @import("response.zig");
 const Request = req.Request;
 const Response = resp.Response;
 const os = std.os;
+const Allocator = std.mem.Allocator;
 
 /// Alias for an atomic queue of Clients
 const Clients = std.atomic.Queue(*Client);
@@ -22,7 +23,7 @@ const Client = struct {
 
     /// Wrapper run function and log any errors that occur
     fn run(self: *Client, server: *Server) void {
-        inlineRun(self, server) catch |err| {
+        self.inlineRun(server) catch |err| {
             log.err("An error occured while handling a request: {}", .{@errorName(err)});
         };
     }
@@ -32,39 +33,39 @@ const Client = struct {
     /// Secondly, creates a new client and sets up its resources (including cleanup)
     /// Finally, it starts the client loop (keep-alive) and parses the incoming requests
     /// and then calls the user provided request handler.
-    inline fn inlineRun(
+    fn inlineRun(
         self: *Client,
         server: *Server,
     ) !void {
         // if (std.event.Loop.instance) |instance| instance.yield();
-        var node = Clients.Node{ .data = self };
+        // var node = Clients.Node{ .data = self };
 
-        server.clients.put(&node);
-        defer if (server.clients.remove(&node)) {
-            self.stream.close();
-        };
-
-        // we allocate the body and allocate a buffer for our response to save syscalls
-        var arena = std.heap.ArenaAllocator.init(server.gpa);
-        defer arena.deinit();
-
-        // max byte size per stack before we allocate more memory
-        const buffer_size: usize = 4096;
-        var stack_allocator = std.heap.stackFallback(buffer_size, &arena.allocator);
-
+        // server.clients.put(&node);
+        // defer if (server.clients.remove(&node)) {
+        //     self.stream.close();
+        //     // server.gpa.destroy(self);
+        // };
         while (true) {
+            // we allocate the body and allocate a buffer for our response to save syscalls
+            var arena = std.heap.ArenaAllocator.init(server.gpa);
+            defer arena.deinit();
+
+            // max byte size per stack before we allocate more memory
+            const buffer_size: usize = 4096;
+            var stack_allocator = std.heap.stackFallback(buffer_size, &arena.allocator);
+
             const parsed_request = req.parse(
                 stack_allocator.get(),
                 self.stream.reader(),
                 buffer_size,
             ) catch |err| switch (err) {
                 // not an error, client disconnected
-                req.ParseError.EndOfStream => return,
+                error.EndOfStream => return,
                 else => return err,
             };
 
             // create on the stack and allow the user to write to its writer
-            var body = std.ArrayList(u8).init(server.gpa);
+            var body = std.ArrayList(u8).init(&arena.allocator);
             defer body.deinit();
 
             var response = Response{
@@ -143,7 +144,6 @@ const Server = struct {
             };
 
             const client = try self.gpa.create(Client);
-
             client.* = .{
                 .stream = conn.stream,
                 .frame = async client.run(self),
