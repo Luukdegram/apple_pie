@@ -1,5 +1,4 @@
 const std = @import("std");
-const pike = @import("pike");
 const net = std.net;
 const Allocator = std.mem.Allocator;
 
@@ -116,7 +115,7 @@ pub const Headers = std.StringArrayHashMap([]const u8);
 /// MSG_NOSIGNAL flag to ignore BrokenPipe signals
 /// This is needed so the server does not get interrupted
 pub const SocketWriter = struct {
-    handle: *pike.Socket,
+    handle: *std.os.socket_t,
 
     /// Alias for `std.os.SendError`
     /// Required constant for `std.io.BufferedWriter`
@@ -157,13 +156,13 @@ pub const Response = struct {
     /// StringHashMap([]const u8) with key and value of headers
     headers: Headers,
     /// Buffered writer that writes to our socket
-    socket_writer: std.io.BufferedWriter(4096, SocketWriter),
+    socket_writer: std.io.BufferedWriter(4096, net.Stream.Writer),
     /// True when write() has been called
     is_flushed: bool,
     /// Response body, can be written to through the writer interface
     body: std.ArrayList(u8).Writer,
 
-    pub const Error = SocketWriter.Error || error{OutOfMemory};
+    pub const Error = net.Stream.WriteError || error{OutOfMemory};
 
     pub const Writer = std.io.Writer(*Response, Error, write);
 

@@ -1,6 +1,0 @@
-[submodule "libs/pike"]
-	path = libs/pike
-	url = https://github.com/lithdew/pike
-[submodule "libs/zap"]
-	path = libs/zap
-	url = https://github.com/kprotty/zap.git
