@@ -2,23 +2,12 @@ const std = @import("std");
 const Builder = std.build.Builder;
 
 pub fn build(b: *Builder) void {
-    const pike = std.build.Pkg{
-        .name = "pike",
-        .path = "libs/pike/pike.zig",
-    };
-
-    const zap = std.build.Pkg{
-        .name = "zap",
-        .path = "libs/zap/src/zap.zig",
-    };
     const mode = b.standardReleaseOptions();
 
     // builds the library as a static library
     {
         const lib = b.addStaticLibrary("apple_pie", "src/server.zig");
         lib.setBuildMode(mode);
-        lib.addPackage(pike);
-        lib.addPackage(zap);
         lib.install();
     }
 
@@ -26,8 +15,6 @@ pub fn build(b: *Builder) void {
     {
         var main_tests = b.addTest("src/apple_pie.zig");
         main_tests.setBuildMode(mode);
-        main_tests.addPackage(pike);
-        main_tests.addPackage(zap);
         const test_step = b.step("test", "Run library tests");
         test_step.dependOn(&main_tests.step);
     }
@@ -55,7 +42,6 @@ pub fn build(b: *Builder) void {
         example.addPackage(.{
             .name = "apple_pie",
             .path = "src/apple_pie.zig",
-            .dependencies = &[_]std.build.Pkg{ pike, zap },
         });
         example.setBuildMode(mode);
         example.install();
