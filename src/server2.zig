@@ -31,7 +31,13 @@ pub fn listenAndServe(
     try stream.listen(address);
 
     while (true) {
-        var connection = try stream.accept();
+        var connection = stream.accept() catch |err| switch (err) {
+            error.ConnectionResetByPeer, error.ConnectionAborted => {
+                log.err("Could not accept connection: '{s}'", .{@errorName(err)});
+                continue;
+            },
+            else => return err,
+        };
 
         // setup client connection and handle it
         const client = try gpa.create(Client);
@@ -43,7 +49,6 @@ pub fn listenAndServe(
         while (clients.get()) |node| {
             const data = node.data;
             await data.frame;
-            // std.debug.print("Closing {d}\n", .{data.stream.handle});
             data.stream.close();
             gpa.destroy(data);
         }
@@ -79,13 +84,43 @@ fn ClientFn(comptime T: RequestHandler) type {
             var node: Queue(*Self).Node = .{ .data = self };
             defer clients.put(&node);
 
-            // std.debug.print("FD: {d}\n", .{self.stream.handle});
             while (true) {
-                var buf: [4096 * 2]u8 = undefined;
-                const r = try self.stream.reader().read(&buf);
-                if (r == 0) break;
+                var arena = std.heap.ArenaAllocator.init(gpa);
+                defer arena.deinit();
 
-                try self.stream.writer().writeAll("HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nContent-Length: 13\r\n\r\nHello, World!\r\n");
+                const buffer_size: usize = 4096;
+                var stack_allocator = std.heap.stackFallback(buffer_size, &arena.allocator);
+
+                const parsed_request = req.parse(
+                    stack_allocator.get(),
+                    self.stream.reader(),
+                    buffer_size,
+                ) catch |err| switch (err) {
+                    // not an error, client disconnected
+                    error.EndOfStream => return,
+                    else => return err,
+                };
+
+                var body = std.ArrayList(u8).init(stack_allocator.get());
+                defer body.deinit();
+
+                var response = Response{
+                    .headers = resp.Headers.init(stack_allocator.get()),
+                    .socket_writer = std.io.bufferedWriter(self.stream.writer()),
+                    .is_flushed = false,
+                    .body = body.writer(),
+                };
+                defer response.headers.deinit();
+
+                try T(&response, parsed_request);
+
+                if (parsed_request.protocol == .http1_1 and parsed_request.host == null) {
+                    return response.writeHeader(.BadRequest);
+                }
+
+                if (!response.is_flushed) try response.flush();
+
+                if (parsed_request.should_close) return; // close connection
             }
         }
     };
