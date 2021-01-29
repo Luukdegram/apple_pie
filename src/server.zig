@@ -26,6 +26,9 @@ const Client = struct {
     fn run(server: *Server, notifier: *const pike.Notifier, socket: pike.Socket, address: net.Address) void {
         inlineRun(server, notifier, socket, address) catch |err| {
             log.err("An error occured while handling a request: {}", .{@errorName(err)});
+            if (@errorReturnTrace()) |trace| {
+                std.debug.dumpStackTrace(trace.*);
+            }
         };
     }
 
