@@ -196,14 +196,26 @@ pub fn parse(
 
     // we allocate memory for body if neccesary seperately.
     const buffer = try allocator.alloc(u8, buffer_size);
-    const read = try reader.read(buffer);
+    //const read = try reader.read(buffer);
+    var read: usize = 0;
+    while (true) {
+        buffer[read] = try reader.readByte();
+        read += 1;
+
+        if (read >= 4) {
+            if (std.mem.eql(u8, buffer[read - 4 .. read], "\r\n\r\n")) {
+                break;
+            }
+        }
+    }
+
     if (read == 0) return ParseError.EndOfStream;
 
     // index for where header data starts to save
     var header_Start: usize = 0;
 
     var i: usize = 0;
-    while (i < read) {
+    while (true) {
         switch (state) {
             .method => {
                 const index = std.mem.indexOf(u8, buffer[i..], " ") orelse
@@ -269,7 +281,12 @@ pub fn parse(
 
                 // if body fit inside the 4kb buffer, we use that,
                 // else allocate more memory
-                if (length <= read - i) {
+                if (length <= buffer.len - i) {
+                    var index: usize = i;
+                    while (index < i + length) {
+                        index += try reader.read(buffer[index..]);
+                    }
+                    //request.body = body;
                     request.body = buffer[i .. i + length];
                 } else {
                     var body = try allocator.alloc(u8, length);
