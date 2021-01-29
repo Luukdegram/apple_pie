@@ -130,6 +130,9 @@ fn ClientFn(comptime handler: RequestHandler) type {
         fn run(self: *Self, gpa: *Allocator, clients: *Queue(*Self)) void {
             self.handle(gpa, clients) catch |err| {
                 log.err("An error occured handling request: '{s}'", .{@errorName(err)});
+                if (@errorReturnTrace()) |trace| {
+                    std.debug.dumpStackTrace(trace.*);
+                }
             };
         }
 
