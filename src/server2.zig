@@ -97,7 +97,7 @@ fn ClientFn(comptime T: RequestHandler) type {
                     buffer_size,
                 ) catch |err| switch (err) {
                     // not an error, client disconnected
-                    error.EndOfStream => return,
+                    error.EndOfStream, error.ConnectionResetByPeer => return,
                     else => return err,
                 };
 
