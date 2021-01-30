@@ -82,7 +82,7 @@ fn localRedirect(
     defer allocator.free(new_path);
 
     try response.headers.put("Location", new_path);
-    try response.writeHeader(.MovedPermanently);
+    try response.writeHeader(.moved_permanently);
 }
 
 /// Serves a file to the client

@@ -13,6 +13,7 @@ const Queue = std.atomic.Queue;
 /// User API function signature of a request handler
 pub const RequestHandler = fn handle(*Response, Request) anyerror!void;
 
+/// Allows users to set the max buffer size before we allocate memory on the heap to store our data
 const max_buffer_size: usize = if (@hasField(root, "buffer_size")) root.buffer_size else 4096;
 
 pub fn listenAndServe(
@@ -85,7 +86,6 @@ fn ClientFn(comptime handler: RequestHandler) type {
             };
         }
 
-        /// Call `run` and not this function
         fn handle(self: *Self, gpa: *Allocator, clients: *Queue(*Self)) !void {
             defer clients.put(&self.node);
 
@@ -118,8 +118,7 @@ fn ClientFn(comptime handler: RequestHandler) type {
                 try handler(&response, parsed_request);
 
                 if (parsed_request.protocol == .http1_1 and parsed_request.host == null) {
-                    std.debug.print("bad request? {}\n", .{parsed_request});
-                    return response.writeHeader(.BadRequest);
+                    return response.writeHeader(.bad_request);
                 }
 
                 if (!response.is_flushed) try response.flush();
