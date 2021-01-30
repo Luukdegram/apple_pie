@@ -1,5 +1,6 @@
 const std = @import("std");
 const Url = @import("url.zig").Url;
+const Allocator = std.mem.Allocator;
 
 /// Represents a request made by a client
 pub const Request = struct {
@@ -156,6 +157,8 @@ pub const ParseError = error{
     InvalidCharacter,
     /// When the connection has been closed or no more data is available
     EndOfStream,
+    /// Provided request's size is bigger than max size (2^32).
+    StreamTooLong,
 };
 
 /// Parse accepts an `io.Reader`, it will read all data it contains
@@ -164,10 +167,9 @@ pub const ParseError = error{
 /// `buffer_size` is the size that is allocated to parse the request line and headers, any headers
 /// bigger than this size will be skipped.
 pub fn parse(
-    allocator: *std.mem.Allocator,
+    gpa: *Allocator,
     reader: anytype,
-    comptime buffer_size: usize,
-) !Request {
+) (ParseError || @TypeOf(reader).Error)!Request {
     const State = enum {
         method,
         url,
@@ -193,14 +195,20 @@ pub fn parse(
         .host = null,
     };
 
-    // we allocate memory for body if neccesary seperately.
-    const buffer = try allocator.alloc(u8, buffer_size);
-    const read = try reader.read(buffer);
-    if (read == 0) return ParseError.EndOfStream;
+    // default buffer size is 4096. We keep allocating more if required
+    var buffer = try gpa.alloc(u8, 4096);
+    var read: usize = 0;
+    while (true) {
+        const cur_read = try reader.read(buffer[read..]);
+        if (cur_read == 0) return ParseError.EndOfStream;
+        read += cur_read;
+        if (read < buffer.len) break;
+
+        buffer = try gpa.realloc(buffer, buffer.len + 4096);
+    }
 
     // index for where header data starts to save
     var header_Start: usize = 0;
-
     var i: usize = 0;
     while (i < read) {
         switch (state) {
@@ -255,7 +263,7 @@ pub fn parse(
                     continue;
                 }
 
-                if (request.protocol == .http1_1 and std.ascii.eqlIgnoreCase(key, "connection")) {
+                if (request.protocol == .http1_1 and !request.should_close and std.ascii.eqlIgnoreCase(key, "connection")) {
                     if (std.ascii.eqlIgnoreCase(value, "close")) request.should_close = true;
                     continue;
                 }
@@ -264,21 +272,7 @@ pub fn parse(
                     request.host = value;
             },
             .body => {
-                const length = request.content_length;
-
-                // if body fit inside the 4kb buffer, we use that,
-                // else allocate more memory
-                if (length <= read - i) {
-                    request.body = buffer[i .. i + length];
-                } else {
-                    var body = try allocator.alloc(u8, length);
-                    std.mem.copy(u8, body, buffer[i..]);
-                    var index: usize = read - i;
-                    while (index < body.len) {
-                        index += try reader.read(body[index..]);
-                    }
-                    request.body = body;
-                }
+                request.body = buffer[i .. i + request.content_length];
                 break;
             },
         }
@@ -300,7 +294,7 @@ test "Basic request parse" {
         "some body";
 
     const stream = std.io.fixedBufferStream(contents).reader();
-    var request = try parse(&arena.allocator, stream, 4096);
+    var request = try parse(&arena.allocator, stream);
 
     std.testing.expectEqualStrings("/test", request.url.path);
     std.testing.expectEqual(Request.Protocol.http1_1, request.protocol);
