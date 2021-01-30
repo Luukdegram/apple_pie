@@ -4,9 +4,6 @@ const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const HandlerFn = @import("server.zig").RequestHandler;
 
-/// Route handler which contains the response, request and possible captures
-pub const RouteHandler = fn (*Response, Request, anytype) anyerror!void;
-
 /// Contains a path and a handler function that
 pub const Route = struct {
     /// Path by which the route is triggered

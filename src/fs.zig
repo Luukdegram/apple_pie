@@ -116,16 +116,16 @@ pub fn serveFile(
     try stream.print("Content-Type: {s}\r\n", .{MimeType.fromFileName(file_name).toType()});
 
     if (!std.io.is_async) {
-        try stream.writeAll("Connection: Close\r\n");
+        try stream.writeAll("Connection: close\r\n");
     }
 
     //Carrot Return after headers to tell clients where headers end, and body starts
     try stream.writeAll("\r\n");
     try response.socket_writer.flush();
 
-    const out = response.socket_writer.unbuffered_writer.handle;
+    const out = response.socket_writer.unbuffered_writer.context.handle;
     var remaining: u64 = len;
     while (remaining > 0) {
-        remaining -= try std.os.sendfile(out.handle.inner, file.handle, len - remaining, remaining, &[_]std.os.iovec_const{}, &[_]std.os.iovec_const{}, 0);
+        remaining -= try std.os.sendfile(out, file.handle, len - remaining, remaining, &.{}, &.{}, 0);
     }
 }
