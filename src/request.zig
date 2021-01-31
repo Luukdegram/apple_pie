@@ -245,10 +245,10 @@ pub fn parse(
             },
             .header => {
                 if (buffer[i] == '\r') {
-                    if (request.content_length == 0) break;
                     state = .body;
                     i += 2; //Skip the \r\n
                     request.raw_header_data = buffer[header_Start..i]; // remove the \r\n
+                    if (request.content_length == 0) break;
                     continue;
                 }
                 const index = std.mem.indexOf(u8, buffer[i..], ": ") orelse

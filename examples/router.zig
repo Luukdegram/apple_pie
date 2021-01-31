@@ -18,6 +18,7 @@ pub fn main() !void {
         try std.net.Address.parseIp("127.0.0.1", 8080),
         comptime router.router(&[_]router.Route{
             router.get("/", index),
+            router.get("/headers", headers),
             router.get("/files/*", serveFs),
             router.get("/hello/:name", hello),
             router.get("/posts/:post/messages/:message", messages),
@@ -28,7 +29,15 @@ pub fn main() !void {
 /// Very basic text-based response, it's up to implementation to set
 /// the correct content type of the message
 fn index(response: *http.Response, request: http.Request) !void {
-    try response.writer().writeAll("Hello Zig!");
+    try response.writer().writeAll("Hello Zig!\n");
+}
+
+fn headers(response: *http.Response, request: http.Request) !void {
+    try response.writer().print("Path: {s}\n", .{request.url.path});
+    var it = request.iterator();
+    while (it.next()) |header| {
+        try response.writer().print("{s}: {s}\n", .{ header.key, header.value });
+    }
 }
 
 /// Shows "Hello {name}" where {name} is /hello/:name
