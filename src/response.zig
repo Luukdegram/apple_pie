@@ -112,44 +112,6 @@ pub const StatusCode = enum(u16) {
 /// Headers is an alias to `std.StringHashMap([]const u8)`
 pub const Headers = std.StringArrayHashMap([]const u8);
 
-/// SocketWriter writes to a socket and sets the
-/// MSG_NOSIGNAL flag to ignore BrokenPipe signals
-/// This is needed so the server does not get interrupted
-pub const SocketWriter = struct {
-    handle: *std.os.socket_t,
-
-    /// Alias for `std.os.SendError`
-    /// Required constant for `std.io.BufferedWriter`
-    pub const Error = error{
-        DiskQuota,
-        FileTooBig,
-        InputOutput,
-        NoSpaceLeft,
-        OperationAborted,
-        NotOpenForWriting,
-        OperationCancelled,
-    } || std.os.SendError;
-
-    /// Uses fmt to format the given bytes and writes to the socket
-    pub fn print(self: SockerWriter, comptime format: []const u8, args: anytype) Error!usize {
-        return std.fmt.format(self, format, args);
-    }
-
-    /// writes to the socket
-    /// Note that this may not write all bytes, use writeAll for that
-    pub fn write(self: SocketWriter, bytes: []const u8) Error!usize {
-        return self.handle.send(bytes, std.os.MSG_NOSIGNAL);
-    }
-
-    /// Loops untill all bytes have been written to the socket
-    pub fn writeAll(self: SocketWriter, bytes: []const u8) Error!void {
-        var index: usize = 0;
-        while (index != bytes.len) {
-            index += try self.write(bytes[index..]);
-        }
-    }
-};
-
 /// Response allows to set the status code and content of the response
 pub const Response = struct {
     /// status code of the response, 200 by default
@@ -157,7 +119,7 @@ pub const Response = struct {
     /// StringHashMap([]const u8) with key and value of headers
     headers: Headers,
     /// Buffered writer that writes to our socket
-    socket_writer: std.io.BufferedWriter(4096, net.Stream.Writer),
+    buffered_writer: std.io.BufferedWriter(4096, net.Stream.Writer),
     /// True when write() has been called
     is_flushed: bool,
     /// Response body, can be written to through the writer interface
@@ -182,6 +144,7 @@ pub const Response = struct {
     /// Note that this will complete the response and any further writes are illegal.
     pub fn writeHeader(self: *Response, status_code: StatusCode) Error!void {
         self.status_code = status_code;
+        try self.body.print("{s}", .{self.status_code.toString()});
         try self.flush();
     }
 
@@ -192,7 +155,7 @@ pub const Response = struct {
         self.is_flushed = true;
 
         const body = self.body.context.items;
-        var socket = self.socket_writer.writer();
+        var socket = self.buffered_writer.writer();
 
         // Print the status line, we only support HTTP/1.1 for now
         try socket.print("HTTP/1.1 {d} {s}\r\n", .{ @enumToInt(self.status_code), self.status_code.toString() });
@@ -217,7 +180,7 @@ pub const Response = struct {
 
         try socket.writeAll("\r\n");
         if (body.len > 0) try socket.writeAll(body);
-        try self.socket_writer.flush(); // ensure everything is written
+        try self.buffered_writer.flush(); // ensure everything is written
     }
 
     /// Sends a `404 - Resource not found` response

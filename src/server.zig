@@ -152,7 +152,7 @@ fn ClientFn(comptime handler: RequestHandler) type {
 
                 var response = Response{
                     .headers = resp.Headers.init(stack_allocator.get()),
-                    .socket_writer = std.io.bufferedWriter(self.stream.writer()),
+                    .buffered_writer = std.io.bufferedWriter(self.stream.writer()),
                     .is_flushed = false,
                     .body = body.writer(),
                 };
