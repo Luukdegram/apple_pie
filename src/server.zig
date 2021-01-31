@@ -3,12 +3,12 @@ const root = @import("root");
 const req = @import("request.zig");
 const resp = @import("response.zig");
 const net = std.net;
-const os = std.os;
+const atomic = std.atomic;
 const log = std.log.scoped(.apple_pie);
 const Response = resp.Response;
 const Request = req.Request;
 const Allocator = std.mem.Allocator;
-const Queue = std.atomic.Queue;
+const Queue = atomic.Queue;
 
 /// User API function signature of a request handler
 pub const RequestHandler = fn handle(*Response, Request) anyerror!void;
@@ -16,6 +16,10 @@ pub const RequestHandler = fn handle(*Response, Request) anyerror!void;
 /// Allows users to set the max buffer size before we allocate memory on the heap to store our data
 const max_buffer_size: usize = if (@hasField(root, "buffer_size")) root.buffer_size else 4096;
 
+/// Creates a new `Server` instance and starts listening to new connections
+/// Afterwards cleans up any resources.
+/// If the server needs the ability to be shutdown on command, use `Server.init()`
+/// and then start it by calling `run()`.
 pub fn listenAndServe(
     /// Memory allocator, for general usage.
     /// Will be used to setup an arena to free any request/response data.
@@ -25,40 +29,76 @@ pub fn listenAndServe(
     /// User defined `Request`/`Response` handler
     comptime handler: RequestHandler,
 ) !void {
-    var stream = net.StreamServer.init(.{ .reuse_address = true });
-    defer stream.deinit();
+    try (Server.init()).run(gpa, address, handler);
+}
 
-    // client queue to clean up clients after connection is broken/finished
-    const Client = ClientFn(handler);
-    var clients = Queue(*Client).init();
+pub const Server = struct {
+    should_quit: atomic.Bool,
 
-    try stream.listen(address);
+    /// Initializes a new `Server` instance
+    pub fn init() Server {
+        return .{ .should_quit = atomic.Bool.init(false) };
+    }
 
-    while (true) {
-        var connection = stream.accept() catch |err| switch (err) {
-            error.ConnectionResetByPeer, error.ConnectionAborted => {
-                log.err("Could not accept connection: '{s}'", .{@errorName(err)});
-                continue;
-            },
-            else => return err,
-        };
+    /// Starts listening to new connections and serves the responses
+    /// Cleans up any resources that were allocated during the connection
+    pub fn run(
+        self: *Server,
+        /// Memory allocator, for general usage.
+        /// Will be used to setup an arena to free any request/response data.
+        gpa: *Allocator,
+        /// Address the server is listening at
+        address: net.Address,
+        /// User defined `Request`/`Response` handler
+        comptime handler: RequestHandler,
+    ) !void {
+        var stream = net.StreamServer.init(.{ .reuse_address = true });
+        defer stream.deinit();
 
-        // setup client connection and handle it
-        const client = try gpa.create(Client);
-        client.* = Client{
-            .stream = connection.stream,
-            .node = .{ .data = client },
-            .frame = async client.run(gpa, &clients),
-        };
+        // client queue to clean up clients after connection is broken/finished
+        const Client = ClientFn(handler);
+        var clients = Queue(*Client).init();
 
-        while (clients.get()) |node| {
+        // Force clean up any remaining clients that are still connected
+        // if an error occured
+        defer while (clients.get()) |node| {
             const data = node.data;
-            await data.frame;
             data.stream.close();
             gpa.destroy(data);
+        };
+
+        try stream.listen(address);
+
+        while (!self.should_quit.load(.SeqCst)) {
+            var connection = stream.accept() catch |err| switch (err) {
+                error.ConnectionResetByPeer, error.ConnectionAborted => {
+                    log.err("Could not accept connection: '{s}'", .{@errorName(err)});
+                    continue;
+                },
+                else => return err,
+            };
+
+            // setup client connection and handle it
+            const client = try gpa.create(Client);
+            client.* = Client{
+                .stream = connection.stream,
+                .node = .{ .data = client },
+                .frame = async client.run(gpa, &clients),
+            };
+
+            while (clients.get()) |node| {
+                const data = node.data;
+                await data.frame;
+                gpa.destroy(data);
+            }
         }
     }
-}
+
+    /// Tells the server to shutdown
+    pub fn shutdown(self: *Server) void {
+        self.should_quit.store(true, .SeqCst);
+    }
+};
 
 /// Generic Client handler wrapper around the given `T` of `RequestHandler`.
 /// Allows us to wrap our client connection base around the given user defined handler
@@ -87,7 +127,10 @@ fn ClientFn(comptime handler: RequestHandler) type {
         }
 
         fn handle(self: *Self, gpa: *Allocator, clients: *Queue(*Self)) !void {
-            defer clients.put(&self.node);
+            defer {
+                self.stream.close();
+                clients.put(&self.node);
+            }
 
             while (true) {
                 var arena = std.heap.ArenaAllocator.init(gpa);
@@ -127,4 +170,50 @@ fn ClientFn(comptime handler: RequestHandler) type {
             }
         }
     };
+}
+
+test "Basic server test" {
+    if (std.builtin.single_threaded) return error.SkipZigTest;
+
+    const alloc = std.testing.allocator;
+    const test_message = "Hello, Apple pie!";
+    const address = try net.Address.parseIp("0.0.0.0", 8080);
+    var server = Server.init();
+
+    const server_thread = struct {
+        var _addr: net.Address = undefined;
+
+        fn index(response: *Response, request: Request) !void {
+            try response.writer().writeAll(test_message);
+        }
+        fn runServer(context: *Server) !void {
+            try context.run(alloc, _addr, index);
+        }
+    };
+    server_thread._addr = address;
+
+    const thread = try std.Thread.spawn(&server, server_thread.runServer);
+    errdefer server.shutdown();
+
+    var stream = while (true) {
+        var conn = net.tcpConnectToAddress(address) catch |err| switch (err) {
+            error.ConnectionRefused => continue,
+            else => return err,
+        };
+
+        break conn;
+    } else unreachable;
+    errdefer stream.close();
+    try stream.writer().writeAll("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+
+    var buf: [512]u8 = undefined;
+    const len = try stream.reader().read(&buf);
+    stream.close();
+    server.shutdown();
+    thread.wait();
+
+    const index = std.mem.indexOf(u8, buf[0..len], "\r\n\r\n") orelse return error.Unexpected;
+
+    const answer = buf[index + 4 .. len];
+    std.testing.expectEqualStrings(test_message, answer);
 }
