@@ -26,14 +26,12 @@ pub fn Trie(comptime T: type) type {
 
         /// Root node, which is '/'
         root: Node = Node{
-            .childs = &[_]*Node{},
+            .childs = &.{},
             .label = .none,
             .path = "/",
             .data = null,
         },
         size: usize = 0,
-
-        const ResultTag = enum { none, static, with_params };
 
         /// Result is an union which is returned when trying to find
         /// from a path
@@ -45,51 +43,55 @@ pub fn Trie(comptime T: type) type {
                 params: [max_params]Entry,
                 param_count: usize,
             },
+
+            const ResultTag = enum { none, static, with_params };
         };
 
         /// Inserts new nodes based on the given path
         /// `path`[0] must be '/'
-        pub fn insert(self: *Self, comptime path: []const u8, comptime data: T) void {
+        pub fn insert(comptime self: *Self, comptime path: []const u8, comptime data: T) void {
             if (path.len == 1 and path[0] == '/') {
                 self.root.data = data;
                 return;
             }
 
             if (path[0] != '/') @compileError("Path must start with /");
-            if (std.mem.count(u8, path, ":") > max_params) @compileError("This path contains too many parameters");
+            if (comptime std.mem.count(u8, path, ":") > max_params) @compileError("This path contains too many parameters");
 
-            var it = std.mem.split(path[1..], "/");
-            var current = &self.root;
-            loop: while (it.next()) |component| {
-                for (current.childs) |child| {
-                    if (std.mem.eql(u8, child.path, component)) {
-                        current = child;
-                        continue :loop;
+            comptime var it = std.mem.split(path[1..], "/");
+            comptime var current = &self.root;
+            comptime {
+                loop: while (it.next()) |component| {
+                    for (current.childs) |child| {
+                        if (std.mem.eql(u8, child.path, component)) {
+                            current = child;
+                            continue :loop;
+                        }
                     }
-                }
 
-                self.size += 1;
-                var new_node = Node{
-                    .path = component,
-                    .childs = &[_]*Node{},
-                    .label = .none,
-                    .data = null,
-                };
-
-                if (component.len > 0) {
-                    new_node.label = switch (component[0]) {
-                        ':' => .param,
-                        '*' => .all,
-                        else => .none,
+                    self.size += 1;
+                    var new_node = Node{
+                        .path = component,
+                        .childs = &[_]*Node{},
+                        .label = .none,
+                        .data = null,
                     };
+
+                    if (component.len > 0) {
+                        new_node.label = switch (component[0]) {
+                            ':' => .param,
+                            '*' => .all,
+                            else => .none,
+                        };
+                    }
+
+                    var childs: [current.childs.len + 1]*Node = undefined;
+                    std.mem.copy(*Node, &childs, current.childs ++ [_]*Node{&new_node});
+                    current.childs = &childs;
+                    current = &new_node;
+
+                    if (current.label == .all) break;
                 }
-
-                var childs: [current.childs.len + 1]*Node = undefined;
-                std.mem.copy(*Node, &childs, current.childs ++ [_]*Node{&new_node});
-                current.childs = &childs;
-                current = &new_node;
-
-                if (current.label == .all) break;
             }
             current.data = data;
         }
@@ -131,7 +133,7 @@ pub fn Trie(comptime T: type) type {
                         }
                         if (child.label == .param) {
                             params[param_count] = .{ .key = child.path[1..], .value = component };
-                            param_count += 1;
+                            param_count += @boolToInt(param_count < max_params);
                         }
                         current = child;
                         continue :loop;

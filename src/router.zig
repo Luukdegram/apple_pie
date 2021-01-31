@@ -2,7 +2,7 @@ const std = @import("std");
 const trie = @import("trie.zig");
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
-const HandlerFn = @import("server.zig").RequestHandler;
+const RequestHandler = @import("server.zig").RequestHandler;
 
 /// Contains a path and a handler function that
 pub const Route = struct {
@@ -16,9 +16,9 @@ pub const Route = struct {
 
 /// Generic function that inserts each route's path into a radix tree
 /// to retrieve the right route when a request has been made
-pub fn router(comptime routes: []const Route) HandlerFn {
-    comptime var trees: [10]trie.Trie(usize) = undefined;
-    inline for (trees) |*t| t.* = trie.Trie(usize){};
+pub fn router(comptime routes: []const Route) RequestHandler {
+    comptime var trees: [10]trie.Trie(u8) = undefined;
+    inline for (trees) |*t| t.* = trie.Trie(u8){};
 
     inline for (routes) |r, i| {
         if (@typeInfo(@TypeOf(r.handler)) != .Fn) @compileError("Handler must be a function");
@@ -91,7 +91,7 @@ pub fn router(comptime routes: []const Route) HandlerFn {
                         .none => return response.notFound(),
                         .static => |index| {
                             inline for (routes) |route, i|
-                                if (index == i) return handle(route, &[_]trie.Entry{}, response, request);
+                                if (index == i) return handle(route, &.{}, response, request);
                         },
                         .with_params => |object| {
                             inline for (routes) |route, i| {
@@ -103,7 +103,7 @@ pub fn router(comptime routes: []const Route) HandlerFn {
                 },
                 .static => |index| {
                     inline for (routes) |route, i| {
-                        if (index == i) return handle(route, &[_]trie.Entry{}, response, request);
+                        if (index == i) return handle(route, &.{}, response, request);
                     }
                 },
                 .with_params => |object| {
