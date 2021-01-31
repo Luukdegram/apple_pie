@@ -19,18 +19,18 @@ pub const Request = struct {
 
         fn fromString(method: []const u8) Method {
             return switch (method[0]) {
-                'G' => Method.get,
-                'H' => Method.head,
-                'P' => switch (method[1]) {
-                    'O' => Method.post,
-                    'U' => Method.put,
-                    else => Method.patch,
-                },
-                'D' => Method.delete,
-                'C' => Method.connect,
-                'O' => Method.options,
-                'T' => Method.trace,
-                else => Method.any,
+                'G' => .get,
+                'H' => .head,
+                'P' => @as(Method, switch (method[1]) {
+                    'O' => .post,
+                    'U' => .put,
+                    else => .patch,
+                }),
+                'D' => .delete,
+                'C' => .connect,
+                'O' => .options,
+                'T' => .trace,
+                else => .any,
             };
         }
     };
@@ -194,6 +194,11 @@ pub fn parse(
         .should_close = false,
         .host = null,
     };
+
+    // TODO: TCP is a streaming protocol, if data is sent more slowly
+    // we should just keep reading until timeout/all data received
+    // Right now, we sometimes return an error because all data simply
+    // hasn't been sent yet
 
     // default buffer size is 4096. We keep allocating more if required
     var buffer = try gpa.alloc(u8, 4096);
