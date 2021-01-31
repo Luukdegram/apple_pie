@@ -147,7 +147,7 @@ fn ClientFn(comptime handler: RequestHandler) type {
                     else => return err,
                 };
 
-                var body = std.ArrayList(u8).init(stack_allocator.get());
+                var body = std.ArrayList(u8).init(gpa);
                 defer body.deinit();
 
                 var response = Response{
@@ -156,7 +156,6 @@ fn ClientFn(comptime handler: RequestHandler) type {
                     .is_flushed = false,
                     .body = body.writer(),
                 };
-                defer response.headers.deinit();
 
                 try handler(&response, parsed_request);
 
