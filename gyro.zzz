@@ -1,0 +1,17 @@
+pkgs:
+  apple_pie:
+    version: 0.0.1
+    description: "Basic HTTP server implementation in Zig"
+    license: MIT
+    source_url: "https://github.com/Luukdegram/apple_pie"
+    tags:
+      http-server
+      server
+      http
+
+    root: src/apple_pie.zig
+    files:
+      README.md
+      LICENSE
+      src/*.zig
+      examples/*.zig
