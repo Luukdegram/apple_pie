@@ -15,9 +15,16 @@ pub const RequestHandler = fn handle(*Response, Request) anyerror!void;
 
 /// Allows users to set the max buffer size before we allocate memory on the heap to store our data
 const max_buffer_size: usize = if (@hasField(root, "buffer_size")) root.buffer_size else 4096;
+/// Allows users to set the max request header buffer size before we return error.RequestTooLarge.
+const max_request_size: usize = if (@hasField(root, "request_buffer_size")) root.request_buffer_size else 4096;
 
 /// Creates a new `Server` instance and starts listening to new connections
 /// Afterwards cleans up any resources.
+///
+/// This creates a `Server` with default options, meaning it uses 4096 bytes
+/// max for parsing request headers and 4096 bytes as a stack buffer before it
+/// will allocate any memory
+///
 /// If the server needs the ability to be shutdown on command, use `Server.init()`
 /// and then start it by calling `run()`.
 pub fn listenAndServe(
@@ -138,15 +145,6 @@ fn ClientFn(comptime handler: RequestHandler) type {
 
                 var stack_allocator = std.heap.stackFallback(max_buffer_size, &arena.allocator);
 
-                const parsed_request = req.parse(
-                    stack_allocator.get(),
-                    self.stream.reader(),
-                ) catch |err| switch (err) {
-                    // not an error, client disconnected
-                    error.EndOfStream, error.ConnectionResetByPeer => return,
-                    else => return err,
-                };
-
                 var body = std.ArrayList(u8).init(gpa);
                 defer body.deinit();
 
@@ -157,15 +155,26 @@ fn ClientFn(comptime handler: RequestHandler) type {
                     .body = body.writer(),
                 };
 
+                const parsed_request = req.parse(
+                    stack_allocator.get(),
+                    self.stream.reader(),
+                    max_request_size,
+                ) catch |err| switch (err) {
+                    // not an error, client disconnected
+                    error.EndOfStream, error.ConnectionResetByPeer => return,
+                    error.HeadersTooLarge => return response.writeHeader(.request_header_fields_too_large),
+                    else => return response.writeHeader(.bad_request),
+                };
+
                 try handler(&response, parsed_request);
 
                 if (parsed_request.protocol == .http1_1 and parsed_request.host == null) {
                     return response.writeHeader(.bad_request);
                 }
 
-                if (!response.is_flushed) try response.flush();
-
+                if (!response.is_flushed) try response.flush(); // ensure data is flushed
                 if (parsed_request.should_close) return; // close connection
+                if (!std.io.is_async) return; // io_mode = blocking
             }
         }
     };

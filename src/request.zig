@@ -1,6 +1,7 @@
 const std = @import("std");
 const Url = @import("url.zig").Url;
 const Allocator = std.mem.Allocator;
+const mem = std.mem;
 
 /// Represents a request made by a client
 pub const Request = struct {
@@ -159,6 +160,11 @@ pub const ParseError = error{
     EndOfStream,
     /// Provided request's size is bigger than max size (2^32).
     StreamTooLong,
+    /// Request headers are too large and do not find in `buffer_size`
+    HeadersTooLarge,
+    /// Line ending of the requests are corrupted/invalid. According to the http
+    /// spec, each line must end with \r\n
+    InvalidLineEnding,
 };
 
 /// Parse accepts an `io.Reader`, it will read all data it contains
@@ -169,6 +175,7 @@ pub const ParseError = error{
 pub fn parse(
     gpa: *Allocator,
     reader: anytype,
+    comptime buffer_size: usize,
 ) (ParseError || @TypeOf(reader).Error)!Request {
     const State = enum {
         method,
@@ -200,17 +207,9 @@ pub fn parse(
     // Right now, we sometimes return an error because all data simply
     // hasn't been sent yet
 
-    // default buffer size is 4096. We keep allocating more if required
-    var buffer = try gpa.alloc(u8, 4096);
-    var read: usize = 0;
-    while (true) {
-        const cur_read = try reader.read(buffer[read..]);
-        if (cur_read == 0) return ParseError.EndOfStream;
-        read += cur_read;
-        if (read < buffer.len) break;
-
-        buffer = try gpa.realloc(buffer, buffer.len + 4096);
-    }
+    var buffer: [buffer_size]u8 = undefined;
+    const read = try reader.read(&buffer);
+    if (read == 0) return ParseError.EndOfStream;
 
     // index for where header data starts to save
     var header_Start: usize = 0;
@@ -277,7 +276,21 @@ pub fn parse(
                     request.host = value;
             },
             .body => {
-                request.body = buffer[i .. i + request.content_length];
+                const length = request.content_length;
+
+                // if body fit inside the buffer, we use that,
+                // else allocate more memory
+                if (length <= read - i) {
+                    request.body = buffer[i .. i + length];
+                } else {
+                    const body = try gpa.alloc(u8, length);
+                    std.mem.copy(u8, body, buffer[i..]);
+                    var index: usize = read - i;
+                    while (index < body.len) {
+                        index += try reader.read(body[index..]);
+                    }
+                    request.body = body;
+                }
                 break;
             },
         }
