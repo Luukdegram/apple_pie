@@ -33,12 +33,7 @@ pub fn router(comptime routes: []const Route) RequestHandler {
     }
 
     return struct {
-        fn handle(
-            comptime route: Route,
-            params: []const trie.Entry,
-            res: *Response,
-            req: Request,
-        ) !void {
+        fn handle(comptime route: Route, params: []const trie.Entry, res: *Response, req: Request) !void {
             const Fn = @typeInfo(@TypeOf(route.handler)).Fn;
             const args = Fn.args;
             if (args.len == 2) return route.handler(res, req);

@@ -158,10 +158,11 @@ fn ClientFn(comptime handler: RequestHandler) type {
                     .body = body.writer(),
                 };
 
+                var buffer: [max_request_size]u8 = undefined;
                 const parsed_request = req.parse(
                     stack_allocator.get(),
                     self.stream.reader(),
-                    max_request_size,
+                    &buffer,
                 ) catch |err| switch (err) {
                     // not an error, client disconnected
                     error.EndOfStream, error.ConnectionResetByPeer => return,
@@ -215,12 +216,14 @@ test "Basic server test" {
         break conn;
     } else unreachable;
     errdefer stream.close();
+    // tell server to shutdown
+    // fill finish current request and then shutdown
+    server.shutdown();
     try stream.writer().writeAll("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
 
     var buf: [512]u8 = undefined;
     const len = try stream.reader().read(&buf);
     stream.close();
-    server.shutdown();
     thread.wait();
 
     const index = std.mem.indexOf(u8, buf[0..len], "\r\n\r\n") orelse return error.Unexpected;

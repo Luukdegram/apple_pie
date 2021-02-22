@@ -172,11 +172,7 @@ pub const ParseError = error{
 /// The memory of the `Request` is owned by the caller and can be freed by using deinit()
 /// `buffer_size` is the size that is allocated to parse the request line and headers, any headers
 /// bigger than this size will be skipped.
-pub fn parse(
-    gpa: *Allocator,
-    reader: anytype,
-    comptime buffer_size: usize,
-) (ParseError || @TypeOf(reader).Error)!Request {
+pub fn parse(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Error)!Request {
     const State = enum {
         method,
         url,
@@ -207,8 +203,7 @@ pub fn parse(
     // Right now, we sometimes return an error because all data simply
     // hasn't been sent yet
 
-    var buffer: [buffer_size]u8 = undefined;
-    const read = try reader.read(&buffer);
+    const read = try reader.read(buffer);
     if (read == 0) return ParseError.EndOfStream;
 
     // index for where header data starts to save
@@ -311,8 +306,9 @@ test "Basic request parse" {
         "\r\n" ++
         "some body";
 
+    var buf: [4096]u8 = undefined;
     const stream = std.io.fixedBufferStream(contents).reader();
-    var request = try parse(&arena.allocator, stream);
+    var request = try parse(&arena.allocator, stream, &buf);
 
     std.testing.expectEqualStrings("/test", request.url.path);
     std.testing.expectEqual(Request.Protocol.http1_1, request.protocol);
