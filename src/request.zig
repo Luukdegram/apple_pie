@@ -165,6 +165,8 @@ pub const ParseError = error{
     /// Line ending of the requests are corrupted/invalid. According to the http
     /// spec, each line must end with \r\n
     InvalidLineEnding,
+    /// When body is incomplete
+    InvalidBody,
 };
 
 /// Parse accepts an `io.Reader`, it will read all data it contains
@@ -173,16 +175,6 @@ pub const ParseError = error{
 /// `buffer_size` is the size that is allocated to parse the request line and headers, any headers
 /// bigger than this size will be skipped.
 pub fn parse(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Error)!Request {
-    const State = enum {
-        method,
-        url,
-        protocol,
-        header,
-        body,
-    };
-
-    var state: State = .method;
-
     var request: Request = .{
         .body = "",
         .method = .get,
@@ -198,108 +190,169 @@ pub fn parse(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @Typ
         .host = null,
     };
 
-    // TODO: TCP is a streaming protocol, if data is sent more slowly
-    // we should just keep reading until timeout/all data received
-    // Right now, we sometimes return an error because all data simply
-    // hasn't been sent yet
+    var parser = Parser(@TypeOf(reader)).init(gpa, buffer, reader);
+    while (parser.nextEvent()) |ev| {
+        const event = ev orelse break;
 
-    const read = try reader.read(buffer);
-    if (read == 0) return ParseError.EndOfStream;
-
-    // index for where header data starts to save
-    var header_Start: usize = 0;
-    var i: usize = 0;
-    while (i <= read) {
-        switch (state) {
-            .method => {
-                const index = std.mem.indexOf(u8, buffer[i..], " ") orelse
-                    return ParseError.InvalidMethod;
-
-                request.method = Request.Method.fromString(buffer[i .. i + index]);
-                i += index + 1;
-                state = .url;
+        switch (event) {
+            .status => |status| {
+                request.protocol = Request.Protocol.fromString(status.protocol);
+                request.url = Url.init(status.path);
+                request.method = Request.Method.fromString(status.method);
             },
-            .url => {
-                const index = std.mem.indexOf(u8, buffer[i..], " ") orelse
-                    return ParseError.InvalidUrl;
-
-                request.url = Url.init(buffer[i .. i + index]);
-                i += request.url.raw_path.len + 1;
-                state = .protocol;
-            },
-            .protocol => {
-                const index = std.mem.indexOf(u8, buffer[i..], "\r\n") orelse
-                    return ParseError.InvalidProtocol;
-
-                if (index > 8) return ParseError.InvalidProtocol;
-                request.protocol = Request.Protocol.fromString(buffer[i .. i + index]);
-                i += index + 2; // skip \r\n
-                state = .header;
-                header_Start = i;
-            },
-            .header => {
-                if (buffer[i] == '\r') {
-                    state = .body;
-                    i += 2; //Skip the \r\n
-                    request.raw_header_data = buffer[header_Start..i]; // remove the \r\n
-                    if (request.content_length == 0) break;
-                    continue;
-                }
-                const index = std.mem.indexOf(u8, buffer[i..], ": ") orelse
-                    return ParseError.MissingHeaders;
-
-                const key = buffer[i .. i + index];
-                i += key.len + 2; // skip ": "
-
-                const end = std.mem.indexOf(u8, buffer[i..], "\r\n") orelse
-                    return ParseError.IncorrectHeader;
-
-                const value = buffer[i .. i + end];
-                i += value.len + 2; //skip \r\n
-
-                if (request.content_length == 0 and std.ascii.eqlIgnoreCase(key, "content-length")) {
-                    request.content_length = try std.fmt.parseInt(usize, value, 10);
-                    continue;
+            .header => |header| {
+                if (request.protocol != .http1_0 and !request.should_close and std.ascii.eqlIgnoreCase(header.key, "connection")) {
+                    if (std.ascii.eqlIgnoreCase(header.value, "close")) request.should_close = true;
                 }
 
-                if (request.protocol == .http1_1 and !request.should_close and std.ascii.eqlIgnoreCase(key, "connection")) {
-                    if (std.ascii.eqlIgnoreCase(value, "close")) request.should_close = true;
-                    continue;
-                }
-
-                if (request.host == null and std.ascii.eqlIgnoreCase(key, "host"))
-                    request.host = value;
+                if (request.host == null and std.ascii.eqlIgnoreCase(header.key, "host"))
+                    request.host = header.value;
             },
-            .body => {
-                const length = request.content_length;
-
-                // if body fit inside the buffer, we use that,
-                // else allocate more memory
-                if (length <= read - i) {
-                    request.body = buffer[i .. i + length];
-                } else {
-                    const body = try gpa.alloc(u8, length);
-
-                    // if the body is less than the buffer, try to fill in
-                    // from it, and still read more, else, copy the entire
-                    // buffer into working body
-                    if (length < buffer.len) {
-                        std.mem.copy(u8, body, buffer[i..(i + length)]);
-                    } else {
-                        std.mem.copy(u8, body, buffer[i..]);
-                    }
-                    var index: usize = read - i;
-                    while (index < body.len) {
-                        index += try reader.read(body[index..]);
-                    }
-                    request.body = body;
-                }
-                break;
-            },
+            .body => |body| request.body = body,
+            .skip => {},
         }
+    } else |err| switch (err) {
+        else => |e| return e,
     }
+    request.content_length = parser.content_length;
+    request.raw_header_data = buffer[parser.header_start..parser.header_end];
 
     return request;
+}
+
+fn Parser(ReaderType: anytype) type {
+    return struct {
+        const Self = @This();
+
+        buffer: []u8,
+        index: usize,
+        gpa: *Allocator,
+        state: std.meta.Tag(Event),
+        reader: ReaderType,
+        done: bool,
+        content_length: usize,
+        header_start: usize,
+        header_end: usize,
+
+        const Event = union(enum) {
+            status: struct {
+                method: []const u8,
+                path: []const u8,
+                protocol: []const u8,
+            },
+            header: struct {
+                key: []const u8,
+                value: []const u8,
+            },
+            body: []const u8,
+            skip: void,
+        };
+
+        const Error = ParseError || ReaderType.Error;
+
+        fn init(gpa: *Allocator, buffer: []u8, reader: ReaderType) Self {
+            return .{
+                .buffer = buffer,
+                .reader = reader,
+                .gpa = gpa,
+                .state = .status,
+                .index = 0,
+                .done = false,
+                .content_length = 0,
+                .header_start = 0,
+                .header_end = 0,
+            };
+        }
+
+        fn nextEvent(self: *Self) Error!?Event {
+            if (self.done) return null;
+
+            return switch (self.state) {
+                .status => self.parseStatus(),
+                .header => self.parseHeader(),
+                .body => self.parseBody(),
+                .skip => unreachable,
+            };
+        }
+
+        fn parseStatus(self: *Self) Error!?Event {
+            self.state = .header;
+            const line = (try self.reader.readUntilDelimiterOrEof(self.buffer, '\n')) orelse return ParseError.EndOfStream;
+            self.index += line.len + 1;
+            self.header_start = self.index;
+            var it = mem.tokenize(try assertLE(line), " ");
+
+            const method = it.next() orelse return ParseError.InvalidMethod;
+            const path = it.next() orelse return ParseError.InvalidUrl;
+            const protocol = it.next() orelse return ParseError.InvalidProtocol;
+
+            return Event{
+                .status = .{
+                    .method = method,
+                    .path = path,
+                    .protocol = protocol,
+                },
+            };
+        }
+
+        fn parseHeader(self: *Self) Error!?Event {
+            const line = (try self.reader.readUntilDelimiterOrEof(self.buffer[self.index..], '\n')) orelse return ParseError.EndOfStream;
+            self.index += line.len + 1;
+            if (line.len == 1) {
+                if (self.content_length == 0) self.done = true;
+                self.state = .body;
+                self.header_end = self.index;
+                return Event.skip;
+            }
+            var it = mem.tokenize(try assertLE(line), " ");
+
+            const key = try assertKey(it.next() orelse return ParseError.MissingHeaders);
+            const value = it.next() orelse return ParseError.IncorrectHeader;
+
+            if (self.content_length == 0 and std.ascii.eqlIgnoreCase("content-length", key))
+                self.content_length = try std.fmt.parseInt(usize, value, 10);
+
+            return Event{
+                .header = .{
+                    .key = key,
+                    .value = value,
+                },
+            };
+        }
+
+        fn parseBody(self: *Self) Error!?Event {
+            self.done = true;
+            const length = self.content_length;
+
+            // if body fit inside the buffer, we use that,
+            // else allocate more memory
+            if (length <= self.buffer.len - self.index) {
+                const read = try self.reader.readAll(self.buffer[self.index..]);
+                if (read < length) return ParseError.InvalidBody;
+                return Event{
+                    .body = self.buffer[self.index .. self.index + read],
+                };
+            } else {
+                const body = try self.gpa.alloc(u8, length);
+                const read = try self.reader.readAll(body);
+                if (read < length) return ParseError.InvalidBody;
+                return Event{ .body = body };
+            }
+        }
+
+        fn assertLE(line: []const u8) ParseError![]const u8 {
+            const idx = line.len - 1;
+            if (line[idx] != '\r') return ParseError.InvalidLineEnding;
+
+            return line[0..idx];
+        }
+
+        fn assertKey(key: []const u8) ParseError![]const u8 {
+            const idx = key.len - 1;
+            if (key[idx] != ':') return ParseError.IncorrectHeader;
+            return key[0..idx];
+        }
+    };
 }
 
 test "Basic request parse" {
