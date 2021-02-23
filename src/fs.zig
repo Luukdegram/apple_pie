@@ -101,7 +101,7 @@ pub fn serveFile(
         return error.NotAFile;
 
     response.is_flushed = true;
-    var stream = response.writer();
+    var stream = response.buffered_writer.unbuffered_writer;
     const len = stat.size;
 
     // write status line
@@ -121,9 +121,8 @@ pub fn serveFile(
 
     //Carrot Return after headers to tell clients where headers end, and body starts
     try stream.writeAll("\r\n");
-    try response.flush();
 
-    const out = response.buffered_writer.unbuffered_writer.context.handle;
+    const out = stream.context.handle;
     var remaining: u64 = len;
     while (remaining > 0) {
         remaining -= try std.os.sendfile(out, file.handle, len - remaining, remaining, &.{}, &.{}, 0);
