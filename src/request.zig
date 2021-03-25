@@ -209,7 +209,7 @@ pub fn parse(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @Typ
     // index for where header data starts to save
     var header_Start: usize = 0;
     var i: usize = 0;
-    while (i < read) {
+    while (i <= read) {
         switch (state) {
             .method => {
                 const index = std.mem.indexOf(u8, buffer[i..], " ") orelse
