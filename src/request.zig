@@ -279,7 +279,15 @@ pub fn parse(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @Typ
                     request.body = buffer[i .. i + length];
                 } else {
                     const body = try gpa.alloc(u8, length);
-                    std.mem.copy(u8, body, buffer[i..]);
+
+                    // if the body is less than the buffer, try to fill in
+                    // from it, and still read more, else, copy the entire
+                    // buffer into working body
+                    if (length < buffer.len) {
+                        std.mem.copy(u8, body, buffer[i..(i + length)]);
+                    } else {
+                        std.mem.copy(u8, body, buffer[i..]);
+                    }
                     var index: usize = read - i;
                     while (index < body.len) {
                         index += try reader.read(body[index..]);
