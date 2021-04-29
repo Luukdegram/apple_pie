@@ -1,12 +1,11 @@
 const std = @import("std");
 const root = @import("root");
-const req = @import("request.zig");
+const Request = @import("Request.zig");
 const resp = @import("response.zig");
 const net = std.net;
 const atomic = std.atomic;
 const log = std.log.scoped(.apple_pie);
 const Response = resp.Response;
-const Request = req.Request;
 const Allocator = std.mem.Allocator;
 const Queue = atomic.Queue;
 
@@ -159,9 +158,9 @@ fn ClientFn(comptime handler: RequestHandler) type {
                 };
 
                 var buffer: [max_request_size]u8 = undefined;
-                const parsed_request = req.parse(
+                const parsed_request = Request.parse(
                     stack_allocator.get(),
-                    self.stream.reader(),
+                    std.io.bufferedReader(self.stream.reader()).reader(),
                     &buffer,
                 ) catch |err| switch (err) {
                     // not an error, client disconnected
@@ -172,7 +171,7 @@ fn ClientFn(comptime handler: RequestHandler) type {
 
                 try handler(&response, parsed_request);
 
-                if (parsed_request.protocol == .http1_1 and parsed_request.host == null) {
+                if (parsed_request.protocol == .http_1_1 and parsed_request.host == null) {
                     return response.writeHeader(.bad_request);
                 }
 
@@ -204,7 +203,7 @@ test "Basic server test" {
     };
     server_thread._addr = address;
 
-    const thread = try std.Thread.spawn(&server, server_thread.runServer);
+    const thread = try std.Thread.spawn(server_thread.runServer, &server);
     errdefer server.shutdown();
 
     var stream = while (true) {
