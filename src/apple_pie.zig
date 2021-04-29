@@ -1,4 +1,4 @@
-pub const Request = @import("request.zig").Request;
+pub const Request = @import("Request.zig");
 pub const Response = @import("response.zig").Response;
 pub const FileServer = @import("fs.zig").FileServer;
 pub const MimeType = @import("mime_type.zig");
