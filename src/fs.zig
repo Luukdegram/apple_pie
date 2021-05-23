@@ -113,7 +113,7 @@ pub fn serveFile(
     }
 
     try stream.print("Content-Length: {d}\r\n", .{len});
-    try stream.print("Content-Type: {s}\r\n", .{MimeType.fromFileName(file_name).toType()});
+    try stream.print("Content-Type: {s}\r\n", .{MimeType.fromFileName(file_name).toString()});
 
     if (!std.io.is_async) {
         try stream.writeAll("Connection: close\r\n");
