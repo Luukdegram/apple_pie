@@ -1,56 +1,39 @@
 const std = @import("std");
 
-pub const MimeType = enum {
-    js,
-    html,
-    css,
-    png,
-    jpeg,
-    text,
-    unknown,
+const mime_database = @import("mime_db.zig").mime_database;
 
-    /// The supported extensions
-    pub const extensions = &[_][]const u8{
-        ".js",
-        ".html",
-        ".css",
-        ".png",
-        ".jpeg",
-        ".txt",
-    };
+pub const MimeType = struct {
+    const Self = @This();
+
+    text: []const u8,
 
     /// Returns the content-type of a MimeType
-    pub fn toType(self: MimeType) []const u8 {
-        return switch (self) {
-            .js => "application/javascript",
-            .html => "text/html",
-            .css => "text/css",
-            .png => "image/png",
-            .jpeg => "image/jpeg",
-            .text, .unknown => "text/plain",
-        };
+    pub fn toString(self: MimeType) []const u8 {
+        return self.text;
     }
 
     /// Returns the extension that belongs to a MimeType
-    pub fn toExtension(self: MimeType) []const u8 {
-        return extensions[@enumToInt(self)];
+    pub fn toExtension(self: MimeType) ?[]const u8 {
+        for (mime_database) |mapping| {
+            if (std.mem.eql(u8, mapping.mime_type, self.text)) {
+                return mapping.mime_type;
+            }
+        }
+        return null;
     }
 
     /// Returns the MimeType based on the extension
-    pub fn fromExtension(extension: []const u8) MimeType {
-        for (extensions) |ext, i| {
-            if (std.mem.eql(u8, ext, extension)) {
-                return @intToEnum(MimeType, @intCast(u3, i));
+    pub fn fromExtension(ext: []const u8) Self {
+        for (mime_database) |mapping| {
+            if (std.mem.eql(u8, mapping.extension, ext)) {
+                return MimeType{ .text = mapping.mime_type };
             }
         }
-        return .unknown;
+        return MimeType{ .text = "application/octet-stream" };
     }
 
     /// Returns the MimeType based on the file name
     pub fn fromFileName(name: []const u8) MimeType {
-        const index = std.mem.lastIndexOf(u8, name, ".") orelse return .unknown;
-
-        const extension = name[index..];
-        return fromExtension(extension);
+        return fromExtension(std.fs.path.extension(name));
     }
 };
