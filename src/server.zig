@@ -14,9 +14,9 @@ const Queue = atomic.Queue;
 pub const RequestHandler = fn handle(*Response, Request) anyerror!void;
 
 /// Allows users to set the max buffer size before we allocate memory on the heap to store our data
-const max_buffer_size: usize = if (@hasField(root, "buffer_size")) root.buffer_size else 4096;
+const max_buffer_size: usize = if (@hasDecl(root, "buffer_size")) root.buffer_size else 4096;
 /// Allows users to set the max request header buffer size before we return error.RequestTooLarge.
-const max_request_size: usize = if (@hasField(root, "request_buffer_size")) root.request_buffer_size else 4096;
+const max_request_size: usize = if (@hasDecl(root, "request_buffer_size")) root.request_buffer_size else 4096;
 
 /// Creates a new `Server` instance and starts listening to new connections
 /// Afterwards cleans up any resources.
