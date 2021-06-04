@@ -40,11 +40,11 @@ pub fn listenAndServe(
 }
 
 pub const Server = struct {
-    should_quit: atomic.Bool,
+    should_quit: atomic.Atomic(bool),
 
     /// Initializes a new `Server` instance
     pub fn init() Server {
-        return .{ .should_quit = atomic.Bool.init(false) };
+        return .{ .should_quit = atomic.Atomic(bool).init(false) };
     }
 
     /// Starts listening to new connections and serves the responses
