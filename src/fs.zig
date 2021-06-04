@@ -108,8 +108,9 @@ pub fn serveFile(
     try stream.writeAll("HTTP/1.1 200 OK\r\n");
 
     //write headers
-    for (response.headers.items()) |header| {
-        try stream.print("{s}: {s}\r\n", .{ header.key, header.value });
+    var header_it = response.headers.iterator();
+    while (header_it.next()) |header| {
+        try stream.print("{s}: {s}\r\n", .{ header.key_ptr.*, header.value_ptr.* });
     }
 
     try stream.print("Content-Length: {d}\r\n", .{len});

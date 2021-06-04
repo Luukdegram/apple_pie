@@ -161,8 +161,9 @@ pub const Response = struct {
         try socket.print("HTTP/1.1 {d} {s}\r\n", .{ @enumToInt(self.status_code), self.status_code.toString() });
 
         // write headers
-        for (self.headers.items()) |header| {
-            try socket.print("{s}: {s}\r\n", .{ header.key, header.value });
+        var header_it = self.headers.iterator();
+        while (header_it.next()) |header| {
+            try socket.print("{s}: {s}\r\n", .{ header.key_ptr.*, header.value_ptr.* });
         }
 
         // If user has not set content-length, we add it calculated by the length of the body
