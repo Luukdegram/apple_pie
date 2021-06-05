@@ -1,33 +1,37 @@
+//! Contains the parsed request in `context` as well as various
+//! helper methods to ensure the request is handled correctly,
+//! such as reading the body only once.
+const Request = @This();
+
 const std = @import("std");
 const Url = @import("url.zig").Url;
 const Allocator = std.mem.Allocator;
 const mem = std.mem;
+const Stream = std.net.Stream;
 
-const Request = @This();
-
-/// GET, POST, PUT, DELETE or PATCH
-method: Method,
-/// Url object, get be used to retrieve path or query parameters
-url: Url,
-/// HTTP Request headers data.
-raw_header_data: []const u8,
-/// Protocol used by the requester, http1.1, http2.0, etc.
-protocol: Protocol,
-/// Length of requests body
-content_length: usize,
-/// True if http protocol version 1.0 or invalid request
-should_close: bool,
-/// Hostname the request was sent to. Includes its port. Required for HTTP/1.1
-/// Cannot be null for user when `protocol` is `http1_1`.
-host: ?[]const u8,
 /// Internal allocator, fed by an arena allocator. Any memory allocated using this
 /// allocator will be freed upon the end of a request. It's therefore illegal behaviour
-/// to read from/write to its memory after a request and must be duplicated first.
+/// to read from/write to anything allocated with this after a request and must be duplicated first,
+/// or allocated using a different strategy.
 arena: *Allocator,
-/// `std.io.Reader` for the current request. Saved and used to retrieve the body of
-/// a request when content length != 0. Using this reader directly outside the helper
-/// functions such as `bufferedBody` and `body` may cause unwanted side-effects.
-reader: AnyReader,
+/// Provides direct access to the connection stream of the client.
+/// Note that any calls to this is up to the user. Apple Pie provides no safety
+/// measures for incorrect usage.
+///
+/// NOTE: The http status line and request headers have already been read from the stream.
+/// This means the user is free to read the body itself, or use the safety functions such as
+/// `body()` and `bufferedBody()`
+reader: *Reader,
+/// Context provides all information from the actual request that was made by the client.
+context: Context,
+/// Used by the server to determine if the body was read or not, this is to make sure the
+/// stream is empty before trying to read the next request. This must be done for keep-alive.
+/// This is a pointer to a boolean value so it can be modified while the `Request` can remain read-only.
+body_read: *bool,
+
+/// Alias to Stream.ReadError
+/// Possible errors that can occur when reading from the connection stream.
+pub const ReadError = Stream.ReadError;
 
 /// HTTP methods as specified in RFC 7231
 pub const Method = enum {
@@ -88,30 +92,32 @@ pub const Header = struct {
 
 /// Alias to StringHashMapUnmanaged([]const u8)
 pub const Headers = std.StringHashMapUnmanaged([]const u8);
+/// Buffered reader for reading the connection stream
+pub const Reader = std.io.BufferedReader(4096, Stream.Reader);
 
-/// Wrapper struct around any given reader.
-/// This will allow us to store any kind of reader without creating a generic
-/// or having it be comptime.
-const AnyReader = struct {
-    const InnerType = opaque {};
-    inner: *const InnerType,
-    read_fn: fn (self: *const InnerType, buf: []u8) callconv(.Async) anyerror!usize,
-
-    fn init(reader: anytype) AnyReader {
-        const T = std.meta.Child(@TypeOf(reader));
-        return .{
-            .inner = @ptrCast(*const InnerType, reader),
-            .read_fn = struct {
-                fn read(self: *const InnerType, buf: []u8) callconv(.Async) anyerror!usize {
-                    return @ptrCast(*const T, @alignCast(@alignOf(T), self)).read(buf);
-                }
-            }.read,
-        };
-    }
-
-    fn read(self: AnyReader, buffer: []u8) anyerror!usize {
-        return self.read_fn(self.inner, buffer);
-    }
+/// `Context` contains the result from the parser.
+/// `Request` uses this information to handle correctness when parsing
+/// a body or the headers.
+pub const Context = struct {
+    /// GET, POST, PUT, DELETE or PATCH
+    method: Method,
+    /// Url object, get be used to retrieve path or query parameters
+    url: Url,
+    /// HTTP Request headers data.
+    raw_header_data: []const u8,
+    /// Protocol used by the requester, http1.1, http2.0, etc.
+    protocol: Protocol,
+    /// Length of requests body
+    content_length: usize,
+    /// True if http protocol version 1.0 or invalid request
+    should_close: bool,
+    /// Hostname the request was sent to. Includes its port. Required for HTTP/1.1
+    /// Cannot be null for user when `protocol` is `http1_1`.
+    host: ?[]const u8,
+    /// Defines if the request's body is sent chunked or not.
+    /// Note that correctly parsing the body will be handled by calling `body()` and does not
+    /// require manual action from the user.
+    chunked: bool,
 };
 
 /// Iterator to iterate through headers
@@ -151,7 +157,7 @@ const Iterator = struct {
 /// If all headers needs to be known at once, use `headers()`.
 pub fn iterator(self: Request) Iterator {
     return Iterator{
-        .slice = self.raw_header_data[0..],
+        .slice = self.context.raw_header_data[0..],
         .index = 0,
     };
 }
@@ -172,14 +178,16 @@ pub fn headers(self: Request, gpa: *Allocator) !Headers {
 
 /// Parses the body of the request and allocates the contents inside a buffer.
 /// Memory must be handled manually by the caller
-pub fn body(self: Request, gpa: *Allocator) ![]const u8 {
-    if (self.content_length == 0) return "";
-    const buffer = try gpa.alloc(u8, self.content_length);
+pub fn body(self: Request, gpa: *Allocator) (error{ OutOfMemory, EndOfStream } || Stream.ReadError)![]const u8 {
+    defer self.body_read.* = true;
+    const len = self.context.content_length;
+    if (len == 0) return "";
+    const buffer = try gpa.alloc(u8, len);
     var i: usize = 0;
-    while (i < self.content_length) {
-        const len = try self.reader.read(buffer[i..]);
-        if (len == 0) return error.EndOfStream;
-        i += len;
+    while (i < len) {
+        const read_len = try self.reader.read(buffer[i..]);
+        if (read_len == 0) return error.EndOfStream;
+        i += read_len;
     }
     return buffer;
 }
@@ -187,8 +195,9 @@ pub fn body(self: Request, gpa: *Allocator) ![]const u8 {
 /// Reads the body of a request into the given `buffer`
 /// Returns the length that was written to the buffer.
 /// Asserts `buffer` has a size bigger than 0.
-pub fn bufferedBody(self: Request, buffer: []u8) !usize {
+pub fn bufferedBody(self: Request, buffer: []u8) Stream.ReadError!usize {
     std.debug.assert(buffer.len > 0);
+    defer self.body_read.* = true;
     const min = std.math.min(self.content_length, buffer.len);
     return self.reader.read(buffer[0..min]);
 }
@@ -224,13 +233,26 @@ pub const ParseError = error{
     InvalidBody,
 };
 
-/// Parse accepts an `io.Reader`, it will read all data it contains
+var default_body_read_value = false;
+/// Parse accepts a `Stream`. It will read all data it contains
 /// and tries to parse it into a `Request`. Can return `ParseError` if data is corrupt
 /// The memory of the `Request` is owned by the caller and can be freed by using deinit()
 /// `buffer_size` is the size that is allocated to parse the request line and headers, any headers
 /// bigger than this size will be skipped.
-pub fn parse(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Error)!Request {
-    var request: Request = .{
+pub fn parse(gpa: *Allocator, reader: *Reader, buffer: []u8) (ParseError || Stream.ReadError)!Request {
+    return Request{
+        .arena = gpa,
+        .reader = reader,
+        .body_read = &default_body_read_value,
+        .context = try parseContext(
+            reader.reader(),
+            buffer,
+        ),
+    };
+}
+
+fn parseContext(reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Error)!Context {
+    var ctx: Context = .{
         .method = .get,
         .url = Url{
             .path = "/",
@@ -242,36 +264,46 @@ pub fn parse(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @Typ
         .content_length = 0,
         .should_close = false,
         .host = null,
-        .arena = gpa,
-        .reader = AnyReader.init(&reader),
+        .chunked = false,
     };
 
     var parser = Parser(@TypeOf(reader)).init(buffer, reader);
-    while (parser.nextEvent()) |ev| {
-        const event = ev orelse break;
-
+    while (try parser.nextEvent()) |event| {
         switch (event) {
             .status => |status| {
-                request.protocol = Request.Protocol.fromString(status.protocol);
-                request.url = Url.init(status.path);
-                request.method = Request.Method.fromString(status.method);
+                ctx.protocol = Request.Protocol.fromString(status.protocol);
+                ctx.url = Url.init(status.path);
+                ctx.method = Request.Method.fromString(status.method);
             },
             .header => |header| {
-                if (request.protocol != .http_1_0 and !request.should_close and std.ascii.eqlIgnoreCase(header.key, "connection")) {
-                    if (std.ascii.eqlIgnoreCase(header.value, "close")) request.should_close = true;
+                if (ctx.protocol != .http_1_0 and
+                    ctx.protocol != .http_0_9 and
+                    !ctx.should_close and
+                    std.ascii.eqlIgnoreCase(header.key, "connection"))
+                {
+                    if (std.ascii.eqlIgnoreCase(header.value, "close")) ctx.should_close = true;
                 }
 
-                if (request.host == null and std.ascii.eqlIgnoreCase(header.key, "host"))
-                    request.host = header.value;
+                if (ctx.host == null and std.ascii.eqlIgnoreCase(header.key, "host"))
+                    ctx.host = header.value;
+
+                // check if chunked body
+                if (ctx.protocol != .http_1_0 and
+                    ctx.protocol != .http_0_9 and
+                    !ctx.chunked and
+                    std.ascii.eqlIgnoreCase("transfer-encoding", header.key) and
+                    std.ascii.eqlIgnoreCase("chunked", header.value))
+                {
+                    ctx.chunked = true;
+                }
             },
         }
-    } else |err| switch (err) {
-        else => |e| return e,
     }
-    request.content_length = parser.content_length;
-    request.raw_header_data = buffer[parser.header_start..parser.header_end];
 
-    return request;
+    ctx.content_length = parser.content_length;
+    ctx.raw_header_data = buffer[parser.header_start..parser.header_end];
+
+    return ctx;
 }
 
 fn Parser(ReaderType: anytype) type {
@@ -356,8 +388,13 @@ fn Parser(ReaderType: anytype) type {
             const key = try assertKey(it.next() orelse return ParseError.MissingHeaders);
             const value = it.next() orelse return ParseError.IncorrectHeader;
 
-            if (self.content_length == 0 and std.ascii.eqlIgnoreCase("content-length", key))
+            // if content length hasn't been set yet,
+            // check if it exists and set it by parsing the int value
+            if (self.content_length == 0 and
+                std.ascii.eqlIgnoreCase("content-length", key))
+            {
                 self.content_length = try std.fmt.parseInt(usize, value, 10);
+            }
 
             return Event{
                 .header = .{

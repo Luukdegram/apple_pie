@@ -16,7 +16,7 @@ pub fn main() !void {
     try http.listenAndServe(
         allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),
-        comptime router.router(&[_]router.Route{
+        comptime router.router(&.{
             router.get("/", index),
             router.get("/headers", headers),
             router.get("/files/*", serveFs),
@@ -33,7 +33,7 @@ fn index(response: *http.Response, request: http.Request) !void {
 }
 
 fn headers(response: *http.Response, request: http.Request) !void {
-    try response.writer().print("Path: {s}\n", .{request.url.path});
+    try response.writer().print("Path: {s}\n", .{request.context.url.path});
     var it = request.iterator();
     while (it.next()) |header| {
         try response.writer().print("{s}: {s}\n", .{ header.key, header.value });

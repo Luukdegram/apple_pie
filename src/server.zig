@@ -1,3 +1,9 @@
+//! Server handles the connection between the host and the clients.
+//! After a client has succesfully connected, the server will ensure
+//! the request is being parsed and handled correctly before dispatching
+//! it to the user. The server also ensures a body is flushed to the client
+//! before ending a cycle.
+
 const std = @import("std");
 const root = @import("root");
 const Request = @import("Request.zig");
@@ -160,7 +166,7 @@ fn ClientFn(comptime handler: RequestHandler) type {
                 var buffer: [max_request_size]u8 = undefined;
                 const parsed_request = Request.parse(
                     stack_allocator.get(),
-                    std.io.bufferedReader(self.stream.reader()).reader(),
+                    &std.io.bufferedReader(self.stream.reader()),
                     &buffer,
                 ) catch |err| switch (err) {
                     // not an error, client disconnected
@@ -169,15 +175,24 @@ fn ClientFn(comptime handler: RequestHandler) type {
                     else => return response.writeHeader(.bad_request),
                 };
 
-                try handler(&response, parsed_request);
-
-                if (parsed_request.protocol == .http_1_1 and parsed_request.host == null) {
+                if (parsed_request.context.protocol == .http_1_1 and parsed_request.context.host == null) {
                     return response.writeHeader(.bad_request);
                 }
 
+                try handler(&response, parsed_request);
+
                 if (!response.is_flushed) try response.flush(); // ensure data is flushed
-                if (parsed_request.should_close) return; // close connection
+                if (parsed_request.context.should_close) return; // close connection
                 if (!std.io.is_async) return; // io_mode = blocking
+
+                // if the body hasn't been read yet, we skip all body bytes
+                // to ensure the stream is empty before we read the next request.
+                if (!parsed_request.body_read.*) {
+                    try parsed_request.reader.reader().skipBytes(
+                        parsed_request.context.content_length,
+                        .{ .buf_size = 4096 },
+                    );
+                }
             }
         }
     };

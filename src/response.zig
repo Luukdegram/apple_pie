@@ -1,3 +1,8 @@
+//! Handles the logic for sending a response to the client.
+//! Although it provides access to the direct stream,
+//! it is suggested to use the helper methods such as `writer()` to ensure
+//! for correct handling.
+
 const std = @import("std");
 const net = std.net;
 const Allocator = std.mem.Allocator;

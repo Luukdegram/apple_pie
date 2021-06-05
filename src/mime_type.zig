@@ -29,7 +29,7 @@ pub const MimeType = struct {
                 return MimeType{ .text = mapping.mime_type };
             }
         }
-        return MimeType{ .text = "application/octet-stream" };
+        return MimeType{ .text = "text/plain;charset=UTF-8" };
     }
 
     /// Returns the MimeType based on the file name

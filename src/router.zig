@@ -1,6 +1,13 @@
+//! Comptime Trie based router that creates a Trie
+//! for each HTTP method and a catch-all one that works
+//! on any method, granted it has a handler defined.
+//! The router parses params into a type defined as the 3rd
+//! argument of the handler function. Any other argument is ignored for parsing.
+//! multi-params require a struct as argument type.
+
 const std = @import("std");
 const trie = @import("trie.zig");
-const Request = @import("request.zig").Request;
+const Request = @import("Request.zig");
 const Response = @import("response.zig").Response;
 const RequestHandler = @import("server.zig").RequestHandler;
 
@@ -79,10 +86,10 @@ pub fn router(comptime routes: []const Route) RequestHandler {
         }
 
         fn serve(response: *Response, request: Request) !void {
-            switch (trees[@enumToInt(request.method)].get(request.url.path)) {
+            switch (trees[@enumToInt(request.context.method)].get(request.context.url.path)) {
                 .none => {
                     // if nothing was found for current method, try the wildcard
-                    switch (trees[9].get(request.url.path)) {
+                    switch (trees[9].get(request.context.url.path)) {
                         .none => return response.notFound(),
                         .static => |index| {
                             inline for (routes) |route, i|
