@@ -1,5 +1,10 @@
+//! Basic file server that allows for exposing a directory
+//! to the web. the `serve` function ensures the directory is not escaped
+//! using a path. It also allows for providing a `base_path` which it ignores
+//! when parsing the path.
+
 const std = @import("std");
-const Request = @import("request.zig").Request;
+const Request = @import("Request.zig");
 const Response = @import("response.zig").Response;
 const MimeType = @import("mime_type.zig").MimeType;
 const url = @import("url.zig");
@@ -39,7 +44,7 @@ pub fn deinit() void {
 pub fn serve(response: *Response, request: Request) (Response.Error || error{NotAFile} || std.os.SendFileError)!void {
     std.debug.assert(initialized);
     const index = "index.html";
-    var path = url.sanitize(request.url.path);
+    var path = url.sanitize(request.context.url.path);
 
     if (std.mem.endsWith(u8, path, index)) {
         return localRedirect(response, request, "./", alloc);
@@ -61,7 +66,7 @@ pub fn serve(response: *Response, request: Request) (Response.Error || error{Not
     };
     defer file.close();
 
-    serveFile(response, request.url.path, file) catch |err| switch (err) {
+    serveFile(response, request.context.url.path, file) catch |err| switch (err) {
         error.NotAFile => return response.notFound(),
         else => return err,
     };
@@ -77,7 +82,7 @@ fn localRedirect(
 ) (Response.Error)!void {
     const new_path = try std.mem.concat(allocator, u8, &[_][]const u8{
         path,
-        request.url.raw_query,
+        request.context.url.raw_query,
     });
     defer allocator.free(new_path);
 
