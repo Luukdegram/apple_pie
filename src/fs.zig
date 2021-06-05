@@ -40,11 +40,16 @@ pub fn deinit() void {
     dir.close();
 }
 
+pub const ServeError = error{
+    NotAFile,
+} || Response.Error || std.os.SendFileError || std.fs.File.OpenError;
+
 /// Servers a file based on the path of the request
-pub fn serve(response: *Response, request: Request) (Response.Error || error{NotAFile} || std.os.SendFileError)!void {
+pub fn serve(response: *Response, request: Request) ServeError!void {
     std.debug.assert(initialized);
     const index = "index.html";
-    var path = url.sanitize(request.context.url.path);
+    var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    var path = url.sanitize(request.context.url.path, &buffer);
 
     if (std.mem.endsWith(u8, path, index)) {
         return localRedirect(response, request, "./", alloc);
@@ -61,8 +66,9 @@ pub fn serve(response: *Response, request: Request) (Response.Error || error{Not
     // and therefore has access to outside root.
     if (std.mem.startsWith(u8, path, "..")) return response.notFound();
 
-    var file = dir.openFile(path, .{}) catch |_| {
-        return response.notFound();
+    const file = dir.openFile(path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return response.notFound(),
+        else => |e| return e,
     };
     defer file.close();
 

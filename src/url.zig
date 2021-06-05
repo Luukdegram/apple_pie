@@ -118,8 +118,8 @@ fn unescape(allocator: *Allocator, value: []const u8) QueryError![]const u8 {
 
 /// Sanitizes the given `path` by removing '..' etc.
 /// This returns a slice from a static buffer and therefore requires no allocations
-pub fn sanitize(path: []const u8) []const u8 {
-    var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+pub fn sanitize(path: []const u8, buffer: []u8) []const u8 {
+    // var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
 
     if (path.len == 0) {
         buffer[0] = '.';
@@ -128,8 +128,8 @@ pub fn sanitize(path: []const u8) []const u8 {
 
     const rooted = path[0] == '/';
     const len = path.len;
-    std.mem.copy(u8, &buffer, path);
-    var out = BufferUtil.init(&buffer, path);
+    std.mem.copy(u8, buffer, path);
+    var out = BufferUtil.init(buffer, path);
 
     var i: usize = 0;
     var dot: usize = 0;
