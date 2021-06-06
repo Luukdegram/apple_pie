@@ -164,7 +164,9 @@ fn ClientFn(comptime handler: RequestHandler) type {
                 };
 
                 var buffer: [max_request_size]u8 = undefined;
+                var body_read = false;
                 const parsed_request = Request.parse(
+                    &body_read,
                     stack_allocator.get(),
                     &std.io.bufferedReader(self.stream.reader()),
                     &buffer,
