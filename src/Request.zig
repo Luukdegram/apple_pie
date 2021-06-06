@@ -233,17 +233,16 @@ pub const ParseError = error{
     InvalidBody,
 };
 
-var default_body_read_value = false;
 /// Parse accepts a `Stream`. It will read all data it contains
 /// and tries to parse it into a `Request`. Can return `ParseError` if data is corrupt
 /// The memory of the `Request` is owned by the caller and can be freed by using deinit()
 /// `buffer_size` is the size that is allocated to parse the request line and headers, any headers
 /// bigger than this size will be skipped.
-pub fn parse(gpa: *Allocator, reader: *Reader, buffer: []u8) (ParseError || Stream.ReadError)!Request {
+pub fn parse(body_read: *bool, gpa: *Allocator, reader: *Reader, buffer: []u8) (ParseError || Stream.ReadError)!Request {
     return Request{
         .arena = gpa,
         .reader = reader,
-        .body_read = &default_body_read_value,
+        .body_read = body_read,
         .context = try parseContext(
             reader.reader(),
             buffer,
