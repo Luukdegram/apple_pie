@@ -23,7 +23,7 @@ pub const io_mode = .evented;
 // optional root constant to define max stack buffer size per request
 pub const buffer_size: usize = 4096;
 // optional root constant to define max header size per request
-pub const request_buffer_size: usize = 409;
+pub const request_buffer_size: usize = 4096;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
