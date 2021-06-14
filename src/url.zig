@@ -235,7 +235,7 @@ test "Basic raw query" {
     const path = "/example?name=value";
     const url: Url = Url.init(path);
 
-    testing.expectEqualSlices(u8, "?name=value", url.raw_query);
+    try testing.expectEqualSlices(u8, "?name=value", url.raw_query);
 }
 
 test "Retrieve query parameters" {
@@ -244,8 +244,8 @@ test "Retrieve query parameters" {
 
     var query_params = try url.queryParameters(testing.allocator);
     defer query_params.deinit();
-    testing.expect(query_params.contains("name"));
-    testing.expectEqualStrings("value", query_params.get("name") orelse " ");
+    try testing.expect(query_params.contains("name"));
+    try testing.expectEqualStrings("value", query_params.get("name") orelse " ");
 }
 
 test "Sanitize paths" {
@@ -300,6 +300,7 @@ test "Sanitize paths" {
     };
 
     inline for (cases) |case| {
-        testing.expectEqualStrings(case.expected, sanitize(case.input));
+        var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        try testing.expectEqualStrings(case.expected, sanitize(case.input, &buf));
     }
 }

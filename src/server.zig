@@ -245,5 +245,5 @@ test "Basic server test" {
     const index = std.mem.indexOf(u8, buf[0..len], "\r\n\r\n") orelse return error.Unexpected;
 
     const answer = buf[index + 4 .. len];
-    std.testing.expectEqualStrings(test_message, answer);
+    try std.testing.expectEqualStrings(test_message, answer);
 }
