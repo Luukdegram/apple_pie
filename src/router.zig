@@ -86,10 +86,10 @@ pub fn router(comptime routes: []const Route) RequestHandler {
         }
 
         fn serve(response: *Response, request: Request) !void {
-            switch (trees[@enumToInt(request.context.method)].get(request.context.url.path)) {
+            switch (trees[@enumToInt(request.method())].get(request.path())) {
                 .none => {
                     // if nothing was found for current method, try the wildcard
-                    switch (trees[9].get(request.context.url.path)) {
+                    switch (trees[9].get(request.path())) {
                         .none => return response.notFound(),
                         .static => |index| {
                             inline for (routes) |route, i|
