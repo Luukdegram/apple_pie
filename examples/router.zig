@@ -33,7 +33,7 @@ fn index(response: *http.Response, request: http.Request) !void {
 }
 
 fn headers(response: *http.Response, request: http.Request) !void {
-    try response.writer().print("Path: {s}\n", .{request.context.url.path});
+    try response.writer().print("Path: {s}\n", .{request.path()});
     var it = request.iterator();
     while (it.next()) |header| {
         try response.writer().print("{s}: {s}\n", .{ header.key, header.value });

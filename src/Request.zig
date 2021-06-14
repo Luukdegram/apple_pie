@@ -46,11 +46,11 @@ pub const Method = enum {
     patch,
     any,
 
-    fn fromString(method: []const u8) Method {
-        return switch (method[0]) {
+    fn fromString(string: []const u8) Method {
+        return switch (string[0]) {
             'G' => .get,
             'H' => .head,
-            'P' => @as(Method, switch (method[1]) {
+            'P' => @as(Method, switch (string[1]) {
                 'O' => .post,
                 'U' => .put,
                 else => .patch,
@@ -200,6 +200,23 @@ pub fn bufferedBody(self: Request, buffer: []u8) Stream.ReadError!usize {
     defer self.body_read.* = true;
     const min = std.math.min(self.content_length, buffer.len);
     return self.reader.read(buffer[0..min]);
+}
+
+/// Returns the path of the request
+/// To retrieve the raw path, access `context.url.raw_path`
+pub fn path(self: Request) []const u8 {
+    return self.context.url.path;
+}
+
+/// Returns the method of the request as `Method`
+pub fn method(self: Request) Method {
+    return self.context.method;
+}
+
+/// Returns the host. This cannot be null when the request
+/// is HTTP 1.1 or higher.
+pub fn host(self: Request) ?[]const u8 {
+    return self.context.host;
 }
 
 /// Errors which can occur during the parsing of
@@ -361,14 +378,14 @@ fn Parser(ReaderType: anytype) type {
             self.header_start = self.index;
             var it = mem.tokenize(try assertLE(line), " ");
 
-            const method = it.next() orelse return ParseError.InvalidMethod;
-            const path = it.next() orelse return ParseError.InvalidUrl;
+            const parsed_method = it.next() orelse return ParseError.InvalidMethod;
+            const parsed_path = it.next() orelse return ParseError.InvalidUrl;
             const protocol = it.next() orelse return ParseError.InvalidProtocol;
 
             return Event{
                 .status = .{
-                    .method = method,
-                    .path = path,
+                    .method = parsed_method,
+                    .path = parsed_path,
                     .protocol = protocol,
                 },
             };

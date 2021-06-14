@@ -49,7 +49,7 @@ pub fn serve(response: *Response, request: Request) ServeError!void {
     std.debug.assert(initialized);
     const index = "index.html";
     var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    var path = url.sanitize(request.context.url.path, &buffer);
+    var path = url.sanitize(request.path(), &buffer);
 
     if (std.mem.endsWith(u8, path, index)) {
         return localRedirect(response, request, "./", alloc);
@@ -72,7 +72,7 @@ pub fn serve(response: *Response, request: Request) ServeError!void {
     };
     defer file.close();
 
-    serveFile(response, request.context.url.path, file) catch |err| switch (err) {
+    serveFile(response, request.path(), file) catch |err| switch (err) {
         error.NotAFile => return response.notFound(),
         else => return err,
     };

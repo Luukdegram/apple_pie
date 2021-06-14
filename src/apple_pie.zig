@@ -5,7 +5,6 @@ pub const MimeType = @import("mime_type.zig");
 pub const router = @import("router.zig");
 pub usingnamespace @import("server.zig");
 
-comptime {
-    const std = @import("std");
-    std.testing.refAllDecls(@This());
+test {
+    @import("std").testing.refAllDecls(@This());
 }
