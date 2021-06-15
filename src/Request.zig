@@ -310,7 +310,14 @@ fn parseContext(reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Er
                     std.ascii.eqlIgnoreCase("transfer-encoding", header.key) and
                     std.ascii.eqlIgnoreCase("chunked", header.value))
                 {
-                    ctx.chunked = true;
+                    // transfer-encoding can contain a list of encodings.
+                    // Therefore, iterate over them and check for 'chunked'.
+                    var split = std.mem.split(header.key, ", ");
+                    while (split.next()) |maybe_chunk| {
+                        if (std.ascii.eqlIgnoreCase("chunked", maybe_chunk)) {
+                            ctx.chunked = true;
+                        }
+                    }
                 }
             },
         }
@@ -420,20 +427,74 @@ fn Parser(ReaderType: anytype) type {
             };
         }
 
-        fn assertLE(line: []const u8) ParseError![]const u8 {
-            if (line.len == 0) return ParseError.InvalidLineEnding;
-            const idx = line.len - 1;
-            if (line[idx] != '\r') return ParseError.InvalidLineEnding;
-
-            return line[0..idx];
-        }
-
         fn assertKey(key: []const u8) ParseError![]const u8 {
             const idx = key.len - 1;
             if (key[idx] != ':') return ParseError.IncorrectHeader;
             return key[0..idx];
         }
     };
+}
+
+fn assertLE(line: []const u8) ParseError![]const u8 {
+    if (line.len == 0) return ParseError.InvalidLineEnding;
+    const idx = line.len - 1;
+    if (line[idx] != '\r') return ParseError.InvalidLineEnding;
+
+    return line[0..idx];
+}
+
+/// Reads request bodies that use transfer-encoding 'chunked'
+fn ChunkedReader(comptime ReaderType: type) type {
+    return struct {
+        const Self = @This();
+
+        reader: ReaderType,
+        buffer: []u8,
+        state: enum {
+            empty,
+            end,
+        },
+
+        fn init(reader: ReaderType, buffer: []u8) Self {
+            return .{ .reader = reader, .buffer = buffer, .state = .empty };
+        }
+
+        /// Reads from the body and returns the next chunk it finds.
+        ///
+        /// NOTE: This overwrites its inner buffer on each call,
+        /// therefore the user must copy or use the data before the next call.
+        pub fn next(self: *Self) !?[]const u8 {
+            switch (self.state) {
+                .empty => {
+                    const lf_line = (try self.reader.readUntilDelimiterOrEof(self.buffer, '\n')) orelse
+                        return error.InvalidBody;
+                    const line = try assertLE(lf_line);
+
+                    const index = std.mem.indexOfScalar(u8, line, ';') orelse
+                        line.len;
+
+                    const chunk_len = try std.fmt.parseInt(usize, line[0..index], 10);
+                    try self.reader.readNoEof(self.buffer[0..chunk_len]);
+
+                    // validate clrf
+                    var crlf: [2]u8 = undefined;
+                    try self.reader.readNoEof(&crlf);
+                    if (!std.mem.eql(u8, "\r\n", &crlf)) return error.InvalidBody;
+
+                    if (chunk_len == 0) {
+                        self.state = .end;
+                        return null;
+                    } else return self.buffer[0..chunk_len];
+                },
+                .end => return null,
+            }
+        }
+    };
+}
+
+/// initializes a new `ChunkedReader` from a given reader and buffer
+fn chunkedReader(reader: anytype, buffer: []u8) ChunkedReader(@TypeOf(reader)) {
+    return ChunkedReader(@TypeOf(reader)).init(reader, buffer);
 }
 
 test "Basic request parse" {
@@ -498,4 +559,28 @@ test "Request iterator" {
     try std.testing.expectEqualStrings("Accept", header2.key);
     try std.testing.expectEqualStrings("content-Length", header3.key);
     try std.testing.expectEqual(@as(?Request.Header, null), header4);
+}
+
+test "Chunked encoding" {
+    const content =
+        "7\r\n" ++
+        "Mozilla\r\n" ++
+        "9\r\n" ++
+        "Developer\r\n" ++
+        "7\r\n" ++
+        "Network\r\n" ++
+        "0\r\n" ++
+        "\r\n";
+    var buf: [2048]u8 = undefined;
+    var fb = std.io.fixedBufferStream(content).reader();
+    var reader = chunkedReader(fb, &buf);
+
+    var result: [2048]u8 = undefined;
+    var i: usize = 0;
+    while (try reader.next()) |chunk| {
+        std.mem.copy(u8, result[i..], chunk);
+        i += chunk.len;
+    }
+
+    try std.testing.expectEqualStrings("MozillaDeveloperNetwork", result[0..i]);
 }
