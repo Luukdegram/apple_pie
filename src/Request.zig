@@ -176,13 +176,30 @@ pub fn headers(self: Request, gpa: *Allocator) !Headers {
     return map;
 }
 
+const x = comptime 5;
+
 /// Parses the body of the request and allocates the contents inside a buffer.
 /// Memory must be handled manually by the caller
-pub fn body(self: Request, gpa: *Allocator) (error{ OutOfMemory, EndOfStream } || Stream.ReadError)![]const u8 {
+pub fn body(self: Request, gpa: *Allocator) ![]const u8 {
     defer self.body_read.* = true;
+
+    if (self.context.chunked) {
+        var buf_list = std.ArrayList(u8).init(gpa);
+        defer buf_list.deinit();
+
+        // TODO: This won't work if a chunk is larger than 4096
+        var chunk_buf: [4096]u8 = undefined;
+        var chunked_reader = chunkedReader(self.reader, &chunk_buf);
+        while (chunked_reader.next()) |chunk| {
+            buf_list.appendSlice(chunk);
+        }
+        return buf_list.toOwnedSlice();
+    }
     const len = self.context.content_length;
     if (len == 0) return "";
     const buffer = try gpa.alloc(u8, len);
+    errdefer gpa.free(buffer);
+
     var i: usize = 0;
     while (i < len) {
         const read_len = try self.reader.read(buffer[i..]);
@@ -195,11 +212,29 @@ pub fn body(self: Request, gpa: *Allocator) (error{ OutOfMemory, EndOfStream } |
 /// Reads the body of a request into the given `buffer`
 /// Returns the length that was written to the buffer.
 /// Asserts `buffer` has a size bigger than 0.
-pub fn bufferedBody(self: Request, buffer: []u8) Stream.ReadError!usize {
+pub fn bufferedBody(self: Request, buffer: []u8) !usize {
     std.debug.assert(buffer.len > 0);
     defer self.body_read.* = true;
-    const min = std.math.min(self.content_length, buffer.len);
-    return self.reader.read(buffer[0..min]);
+
+    if (self.context.chunked) {
+        std.debug.print("Chunked!\n", .{});
+        // TODO: This won't work if a chunk is larger than 4096
+        var chunk_buf: [4096]u8 = undefined;
+        var chunked_reader = chunkedReader(self.reader.reader(), &chunk_buf);
+        var i: usize = 0;
+        while (try chunked_reader.next()) |chunk| {
+            std.mem.copy(u8, buffer[i..], chunk);
+            i += chunk.len;
+        }
+        return i;
+    }
+
+    const min = std.math.min(self.context.content_length, buffer.len);
+    var read_len: usize = 0;
+    while (read_len < min) {
+        read_len += try self.reader.read(buffer[read_len..]);
+    }
+    return read_len;
 }
 
 /// Returns the path of the request
@@ -304,15 +339,13 @@ fn parseContext(reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Er
                     ctx.host = header.value;
 
                 // check if chunked body
-                if (ctx.protocol != .http_1_0 and
-                    ctx.protocol != .http_0_9 and
+                if (ctx.protocol == .http_1_1 and
                     !ctx.chunked and
-                    std.ascii.eqlIgnoreCase("transfer-encoding", header.key) and
-                    std.ascii.eqlIgnoreCase("chunked", header.value))
+                    std.ascii.eqlIgnoreCase("transfer-encoding", header.key))
                 {
                     // transfer-encoding can contain a list of encodings.
                     // Therefore, iterate over them and check for 'chunked'.
-                    var split = std.mem.split(header.key, ", ");
+                    var split = std.mem.split(header.value, ", ");
                     while (split.next()) |maybe_chunk| {
                         if (std.ascii.eqlIgnoreCase("chunked", maybe_chunk)) {
                             ctx.chunked = true;
@@ -451,12 +484,12 @@ fn ChunkedReader(comptime ReaderType: type) type {
         reader: ReaderType,
         buffer: []u8,
         state: enum {
-            empty,
+            reading,
             end,
         },
 
         fn init(reader: ReaderType, buffer: []u8) Self {
-            return .{ .reader = reader, .buffer = buffer, .state = .empty };
+            return .{ .reader = reader, .buffer = buffer, .state = .reading };
         }
 
         /// Reads from the body and returns the next chunk it finds.
@@ -465,7 +498,7 @@ fn ChunkedReader(comptime ReaderType: type) type {
         /// therefore the user must copy or use the data before the next call.
         pub fn next(self: *Self) !?[]const u8 {
             switch (self.state) {
-                .empty => {
+                .reading => {
                     const lf_line = (try self.reader.readUntilDelimiterOrEof(self.buffer, '\n')) orelse
                         return error.InvalidBody;
                     const line = try assertLE(lf_line);
