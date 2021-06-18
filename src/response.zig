@@ -149,6 +149,8 @@ pub const Response = struct {
     /// Note that this will complete the response and any further writes are illegal.
     pub fn writeHeader(self: *Response, status_code: StatusCode) Error!void {
         self.status_code = status_code;
+        // reset body to wipe any user written data
+        self.body.context.items.len = 0;
         try self.body.print("{s}\n", .{self.status_code.toString()});
         try self.flush();
     }

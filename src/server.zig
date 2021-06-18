@@ -181,7 +181,10 @@ fn ClientFn(comptime handler: RequestHandler) type {
                     return response.writeHeader(.bad_request);
                 }
 
-                try handler(&response, parsed_request);
+                handler(&response, parsed_request) catch |err| {
+                    try response.writeHeader(.bad_request);
+                    return err;
+                };
 
                 if (!response.is_flushed) try response.flush(); // ensure data is flushed
                 if (parsed_request.context.should_close) return; // close connection
