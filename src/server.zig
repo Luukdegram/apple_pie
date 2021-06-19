@@ -19,9 +19,16 @@ const Queue = atomic.Queue;
 pub const RequestHandler = fn handle(*Response, Request) anyerror!void;
 
 /// Allows users to set the max buffer size before we allocate memory on the heap to store our data
-const max_buffer_size: usize = if (@hasDecl(root, "buffer_size")) root.buffer_size else 4096;
+const max_buffer_size = blk: {
+    const given = if (@hasDecl(root, "buffer_size")) root.buffer_size else 1024 * 64; // 64kB
+    break :blk std.math.min(given, 1024 * 1024 * 16); // max stack size (16MB)
+};
+
 /// Allows users to set the max request header buffer size before we return error.RequestTooLarge.
-const max_request_size: usize = if (@hasDecl(root, "request_buffer_size")) root.request_buffer_size else 4096;
+const max_request_size = blk: {
+    const given = if (@hasDecl(root, "request_buffer_size")) root.request_buffer_size else 1024 * 64;
+    break :blk std.math.min(given, 1024 * 1024 * 16); // max stack size (16MB)
+};
 
 /// Creates a new `Server` instance and starts listening to new connections
 /// Afterwards cleans up any resources.
@@ -168,7 +175,7 @@ fn ClientFn(comptime handler: RequestHandler) type {
                 const parsed_request = Request.parse(
                     &body_read,
                     stack_allocator.get(),
-                    &std.io.bufferedReader(self.stream.reader()),
+                    std.io.bufferedReader(self.stream.reader()).reader(),
                     &buffer,
                 ) catch |err| switch (err) {
                     // not an error, client disconnected
@@ -193,10 +200,16 @@ fn ClientFn(comptime handler: RequestHandler) type {
                 // if the body hasn't been read yet, we skip all body bytes
                 // to ensure the stream is empty before we read the next request.
                 if (!parsed_request.body_read.*) {
-                    try parsed_request.reader.reader().skipBytes(
-                        parsed_request.context.content_length,
-                        .{ .buf_size = 4096 },
-                    );
+                    if (parsed_request.context.chunked) {
+                        var chunk_buf: [max_buffer_size]u8 = undefined;
+                        var chunked_reader = Request.chunkedReader(parsed_request.reader, &chunk_buf);
+                        try chunked_reader.skip();
+                    } else if (parsed_request.context.content_length > 0) {
+                        try parsed_request.reader.skipBytes(
+                            parsed_request.context.content_length,
+                            .{ .buf_size = 4096 },
+                        );
+                    }
                 }
             }
         }
