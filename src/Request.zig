@@ -3,11 +3,17 @@
 //! such as reading the body only once.
 const Request = @This();
 
+const root = @import("root");
 const std = @import("std");
 const Url = @import("url.zig").Url;
 const Allocator = std.mem.Allocator;
 const mem = std.mem;
 const Stream = std.net.Stream;
+
+const max_buffer_size = blk: {
+    const given = if (@hasDecl(root, "buffer_size")) root.buffer_size else 1024 * 64; // 64kB
+    break :blk std.math.min(given, 1024 * 1024 * 16); // max stack size
+};
 
 /// Internal allocator, fed by an arena allocator. Any memory allocated using this
 /// allocator will be freed upon the end of a request. It's therefore illegal behaviour
@@ -21,7 +27,7 @@ arena: *Allocator,
 /// NOTE: The http status line and request headers have already been read from the stream.
 /// This means the user is free to read the body itself, or use the safety functions such as
 /// `body()` and `bufferedBody()`
-reader: *Reader,
+reader: Reader,
 /// Context provides all information from the actual request that was made by the client.
 context: Context,
 /// Used by the server to determine if the body was read or not, this is to make sure the
@@ -93,7 +99,7 @@ pub const Header = struct {
 /// Alias to StringHashMapUnmanaged([]const u8)
 pub const Headers = std.StringHashMapUnmanaged([]const u8);
 /// Buffered reader for reading the connection stream
-pub const Reader = std.io.BufferedReader(4096, Stream.Reader);
+pub const Reader = std.io.BufferedReader(4096, Stream.Reader).Reader;
 
 /// `Context` contains the result from the parser.
 /// `Request` uses this information to handle correctness when parsing
@@ -187,8 +193,7 @@ pub fn body(self: Request, gpa: *Allocator) ![]const u8 {
         var buf_list = std.ArrayList(u8).init(gpa);
         defer buf_list.deinit();
 
-        // TODO: This won't work if a chunk is larger than 4096
-        var chunk_buf: [4096]u8 = undefined;
+        var chunk_buf: [max_buffer_size]u8 = undefined;
         var chunked_reader = chunkedReader(self.reader, &chunk_buf);
         while (chunked_reader.next()) |chunk| {
             buf_list.appendSlice(chunk);
@@ -217,10 +222,8 @@ pub fn bufferedBody(self: Request, buffer: []u8) !usize {
     defer self.body_read.* = true;
 
     if (self.context.chunked) {
-        std.debug.print("Chunked!\n", .{});
-        // TODO: This won't work if a chunk is larger than 4096
-        var chunk_buf: [4096]u8 = undefined;
-        var chunked_reader = chunkedReader(self.reader.reader(), &chunk_buf);
+        var chunk_buf: [max_buffer_size]u8 = undefined;
+        var chunked_reader = chunkedReader(self.reader, &chunk_buf);
         var i: usize = 0;
         while (try chunked_reader.next()) |chunk| {
             std.mem.copy(u8, buffer[i..], chunk);
@@ -285,18 +288,18 @@ pub const ParseError = error{
     InvalidBody,
 };
 
-/// Parse accepts a `Stream`. It will read all data it contains
-/// and tries to parse it into a `Request`. Can return `ParseError` if data is corrupt
-/// The memory of the `Request` is owned by the caller and can be freed by using deinit()
-/// `buffer_size` is the size that is allocated to parse the request line and headers, any headers
-/// bigger than this size will be skipped.
-pub fn parse(body_read: *bool, gpa: *Allocator, reader: *Reader, buffer: []u8) (ParseError || Stream.ReadError)!Request {
+/// Parse accepts a `Reader`. It will read all data it contains
+/// and tries to parse it into a `Request`. Can return `ParseError` if data is corrupt.
+/// The Allocator is made available to users that require an allocation for during a single request,
+/// as an arena is passed in by the `Server`. The provided buffer is used to parse the actual content,
+/// meaning the entire request -> response can be done with no allocations.
+pub fn parse(body_read: *bool, gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || Stream.ReadError)!Request {
     return Request{
         .arena = gpa,
         .reader = reader,
         .body_read = body_read,
         .context = try parseContext(
-            reader.reader(),
+            reader,
             buffer,
         ),
     };
@@ -522,11 +525,38 @@ fn ChunkedReader(comptime ReaderType: type) type {
                 .end => return null,
             }
         }
+
+        /// Reads the chunked body and discards all data.
+        /// Does validate correctness of the body.
+        pub fn skip(self: *Self) !void {
+            if (self.state == .end) return;
+            while (true) {
+                const lf_line = (try self.reader.readUntilDelimiterOrEof(self.buffer, '\n')) orelse
+                    return error.InvalidBody;
+                const line = try assertLE(lf_line);
+
+                const index = std.mem.indexOfScalar(u8, line, ';') orelse
+                    line.len;
+
+                const chunk_len = try std.fmt.parseInt(usize, line[0..index], 10);
+                try self.reader.readNoEof(self.buffer[0..chunk_len]);
+
+                // validate clrf
+                var crlf: [2]u8 = undefined;
+                try self.reader.readNoEof(&crlf);
+                if (!std.mem.eql(u8, "\r\n", &crlf)) return error.InvalidBody;
+
+                if (chunk_len == 0) {
+                    self.state = .end;
+                    return;
+                }
+            }
+        }
     };
 }
 
 /// initializes a new `ChunkedReader` from a given reader and buffer
-fn chunkedReader(reader: anytype, buffer: []u8) ChunkedReader(@TypeOf(reader)) {
+pub fn chunkedReader(reader: anytype, buffer: []u8) ChunkedReader(@TypeOf(reader)) {
     return ChunkedReader(@TypeOf(reader)).init(reader, buffer);
 }
 
