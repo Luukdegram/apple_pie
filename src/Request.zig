@@ -20,20 +20,8 @@ const max_buffer_size = blk: {
 /// to read from/write to anything allocated with this after a request and must be duplicated first,
 /// or allocated using a different strategy.
 arena: *Allocator,
-/// Provides direct access to the connection stream of the client.
-/// Note that any calls to this is up to the user. Apple Pie provides no safety
-/// measures for incorrect usage.
-///
-/// NOTE: The http status line and request headers have already been read from the stream.
-/// This means the user is free to read the body itself, or use the safety functions such as
-/// `body()` and `bufferedBody()`
-reader: Reader,
 /// Context provides all information from the actual request that was made by the client.
 context: Context,
-/// Used by the server to determine if the body was read or not, this is to make sure the
-/// stream is empty before trying to read the next request. This must be done for keep-alive.
-/// This is a pointer to a boolean value so it can be modified while the `Request` can remain read-only.
-body_read: *bool,
 
 /// Alias to Stream.ReadError
 /// Possible errors that can occur when reading from the connection stream.
@@ -113,17 +101,19 @@ pub const Context = struct {
     raw_header_data: []const u8,
     /// Protocol used by the requester, http1.1, http2.0, etc.
     protocol: Protocol,
-    /// Length of requests body
-    content_length: usize,
-    /// True if http protocol version 1.0 or invalid request
-    should_close: bool,
     /// Hostname the request was sent to. Includes its port. Required for HTTP/1.1
     /// Cannot be null for user when `protocol` is `http1_1`.
     host: ?[]const u8,
-    /// Defines if the request's body is sent chunked or not.
-    /// Note that correctly parsing the body will be handled by calling `body()` and does not
-    /// require manual action from the user.
-    chunked: bool,
+    /// Body of the request. Its livetime equals that of the request itself,
+    /// meaning that any access to its data beyond that is illegal and must be duplicated
+    /// to extend its lifetime.
+    raw_body: []const u8,
+    /// State of the connection. `keep_alive` is the default for HTTP/1.1 and `close` for earlier versions.
+    /// For HTTP/2.2 browsers such as Chrome and Firefox ignore this.
+    connection_type: enum {
+        keep_alive,
+        close,
+    },
 };
 
 /// Iterator to iterate through headers
@@ -182,62 +172,15 @@ pub fn headers(self: Request, gpa: *Allocator) !Headers {
     return map;
 }
 
-const x = comptime 5;
-
-/// Parses the body of the request and allocates the contents inside a buffer.
-/// Memory must be handled manually by the caller
-pub fn body(self: Request, gpa: *Allocator) ![]const u8 {
-    defer self.body_read.* = true;
-
-    if (self.context.chunked) {
-        var buf_list = std.ArrayList(u8).init(gpa);
-        defer buf_list.deinit();
-
-        var chunk_buf: [max_buffer_size]u8 = undefined;
-        var chunked_reader = chunkedReader(self.reader, &chunk_buf);
-        while (chunked_reader.next()) |chunk| {
-            buf_list.appendSlice(chunk);
-        }
-        return buf_list.toOwnedSlice();
-    }
-    const len = self.context.content_length;
-    if (len == 0) return "";
-    const buffer = try gpa.alloc(u8, len);
-    errdefer gpa.free(buffer);
-
-    var i: usize = 0;
-    while (i < len) {
-        const read_len = try self.reader.read(buffer[i..]);
-        if (read_len == 0) return error.EndOfStream;
-        i += read_len;
-    }
-    return buffer;
-}
-
-/// Reads the body of a request into the given `buffer`
-/// Returns the length that was written to the buffer.
-/// Asserts `buffer` has a size bigger than 0.
-pub fn bufferedBody(self: Request, buffer: []u8) !usize {
-    std.debug.assert(buffer.len > 0);
-    defer self.body_read.* = true;
-
-    if (self.context.chunked) {
-        var chunk_buf: [max_buffer_size]u8 = undefined;
-        var chunked_reader = chunkedReader(self.reader, &chunk_buf);
-        var i: usize = 0;
-        while (try chunked_reader.next()) |chunk| {
-            std.mem.copy(u8, buffer[i..], chunk);
-            i += chunk.len;
-        }
-        return i;
-    }
-
-    const min = std.math.min(self.context.content_length, buffer.len);
-    var read_len: usize = 0;
-    while (read_len < min) {
-        read_len += try self.reader.read(buffer[read_len..]);
-    }
-    return read_len;
+/// Returns the content of the body
+/// Its livetime equals that of the request itself,
+/// meaning that any access to its data beyond that is illegal and must be duplicated
+/// to extend its lifetime.
+///
+/// In case of a form, this contains the raw body.
+/// Use formIterator() or formValue() to access form fields/values.
+pub fn body(self: Request) []const u8 {
+    return self.context.raw_body;
 }
 
 /// Returns the path of the request
@@ -286,6 +229,9 @@ pub const ParseError = error{
     InvalidLineEnding,
     /// When body is incomplete
     InvalidBody,
+    /// When the client uses HTTP version 1.1 and misses the 'host' header, this error will
+    /// be returned.
+    MissingHost,
 };
 
 /// Parse accepts a `Reader`. It will read all data it contains
@@ -293,19 +239,18 @@ pub const ParseError = error{
 /// The Allocator is made available to users that require an allocation for during a single request,
 /// as an arena is passed in by the `Server`. The provided buffer is used to parse the actual content,
 /// meaning the entire request -> response can be done with no allocations.
-pub fn parse(body_read: *bool, gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || Stream.ReadError)!Request {
+pub fn parse(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || Stream.ReadError)!Request {
     return Request{
         .arena = gpa,
-        .reader = reader,
-        .body_read = body_read,
         .context = try parseContext(
+            gpa,
             reader,
             buffer,
         ),
     };
 }
 
-fn parseContext(reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Error)!Context {
+fn parseContext(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Error)!Context {
     var ctx: Context = .{
         .method = .get,
         .url = Url{
@@ -315,13 +260,12 @@ fn parseContext(reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Er
         },
         .raw_header_data = undefined,
         .protocol = .http_1_1,
-        .content_length = 0,
-        .should_close = false,
         .host = null,
-        .chunked = false,
+        .raw_body = "",
+        .connection_type = .keep_alive,
     };
 
-    var parser = Parser(@TypeOf(reader)).init(buffer, reader);
+    var parser = Parser(@TypeOf(reader)).init(gpa, buffer, reader);
     while (try parser.nextEvent()) |event| {
         switch (event) {
             .status => |status| {
@@ -330,37 +274,22 @@ fn parseContext(reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Er
                 ctx.method = Request.Method.fromString(status.method);
             },
             .header => |header| {
-                if (ctx.protocol != .http_1_0 and
-                    ctx.protocol != .http_0_9 and
-                    !ctx.should_close and
+                if (ctx.protocol == .http_1_1 and
+                    ctx.connection_type == .keep_alive and
                     std.ascii.eqlIgnoreCase(header.key, "connection"))
                 {
-                    if (std.ascii.eqlIgnoreCase(header.value, "close")) ctx.should_close = true;
+                    if (std.ascii.eqlIgnoreCase(header.value, "close")) ctx.connection_type = .close;
                 }
 
                 if (ctx.host == null and std.ascii.eqlIgnoreCase(header.key, "host"))
                     ctx.host = header.value;
-
-                // check if chunked body
-                if (ctx.protocol == .http_1_1 and
-                    !ctx.chunked and
-                    std.ascii.eqlIgnoreCase("transfer-encoding", header.key))
-                {
-                    // transfer-encoding can contain a list of encodings.
-                    // Therefore, iterate over them and check for 'chunked'.
-                    var split = std.mem.split(header.value, ", ");
-                    while (split.next()) |maybe_chunk| {
-                        if (std.ascii.eqlIgnoreCase("chunked", maybe_chunk)) {
-                            ctx.chunked = true;
-                        }
-                    }
-                }
             },
+            .end_of_header => ctx.raw_header_data = buffer[parser.header_start..parser.header_end],
+            .body => |content| ctx.raw_body = content,
         }
     }
 
-    ctx.content_length = parser.content_length;
-    ctx.raw_header_data = buffer[parser.header_start..parser.header_end];
+    if (ctx.host == null and ctx.protocol == .http_1_1) return error.MissingHost;
 
     return ctx;
 }
@@ -369,6 +298,7 @@ fn Parser(ReaderType: anytype) type {
     return struct {
         const Self = @This();
 
+        gpa: *Allocator,
         buffer: []u8,
         index: usize,
         state: std.meta.Tag(Event),
@@ -377,6 +307,7 @@ fn Parser(ReaderType: anytype) type {
         content_length: usize,
         header_start: usize,
         header_end: usize,
+        chunked: bool,
 
         const Event = union(enum) {
             status: struct {
@@ -388,12 +319,16 @@ fn Parser(ReaderType: anytype) type {
                 key: []const u8,
                 value: []const u8,
             },
+            body: []const u8,
+            // reached end of header
+            end_of_header: void,
         };
 
         const Error = ParseError || ReaderType.Error;
 
-        fn init(buffer: []u8, reader: ReaderType) Self {
+        fn init(gpa: *Allocator, buffer: []u8, reader: ReaderType) Self {
             return .{
+                .gpa = gpa,
                 .buffer = buffer,
                 .reader = reader,
                 .state = .status,
@@ -402,6 +337,7 @@ fn Parser(ReaderType: anytype) type {
                 .content_length = 0,
                 .header_start = 0,
                 .header_end = 0,
+                .chunked = false,
             };
         }
 
@@ -411,6 +347,8 @@ fn Parser(ReaderType: anytype) type {
             return switch (self.state) {
                 .status => self.parseStatus(),
                 .header => self.parseHeader(),
+                .body => self.parseBody(),
+                .end_of_header => unreachable,
             };
         }
 
@@ -438,9 +376,12 @@ fn Parser(ReaderType: anytype) type {
             const line = (try self.reader.readUntilDelimiterOrEof(self.buffer[self.index..], '\n')) orelse return ParseError.EndOfStream;
             self.index += line.len + 1;
             if (line.len == 1 and line[0] == '\r') {
-                self.done = true;
                 self.header_end = self.index;
-                return null;
+                if (self.content_length == 0 and !self.chunked) {
+                    self.done = true;
+                }
+                self.state = .body;
+                return Event.end_of_header;
             }
             var it = mem.tokenize(try assertLE(line), " ");
 
@@ -455,6 +396,18 @@ fn Parser(ReaderType: anytype) type {
                 self.content_length = try std.fmt.parseInt(usize, value, 10);
             }
 
+            // check if chunked body
+            if (std.ascii.eqlIgnoreCase("transfer-encoding", key)) {
+                // transfer-encoding can contain a list of encodings.
+                // Therefore, iterate over them and check for 'chunked'.
+                var split = std.mem.split(value, ", ");
+                while (split.next()) |maybe_chunk| {
+                    if (std.ascii.eqlIgnoreCase("chunked", maybe_chunk)) {
+                        self.chunked = true;
+                    }
+                }
+            }
+
             return Event{
                 .header = .{
                     .key = key,
@@ -463,84 +416,32 @@ fn Parser(ReaderType: anytype) type {
             };
         }
 
-        fn assertKey(key: []const u8) ParseError![]const u8 {
-            const idx = key.len - 1;
-            if (key[idx] != ':') return ParseError.IncorrectHeader;
-            return key[0..idx];
-        }
-    };
-}
+        fn parseBody(self: *Self) Error!?Event {
+            defer self.done = true;
 
-fn assertLE(line: []const u8) ParseError![]const u8 {
-    if (line.len == 0) return ParseError.InvalidLineEnding;
-    const idx = line.len - 1;
-    if (line[idx] != '\r') return ParseError.InvalidLineEnding;
-
-    return line[0..idx];
-}
-
-/// Reads request bodies that use transfer-encoding 'chunked'
-fn ChunkedReader(comptime ReaderType: type) type {
-    return struct {
-        const Self = @This();
-
-        reader: ReaderType,
-        buffer: []u8,
-        state: enum {
-            reading,
-            end,
-        },
-
-        fn init(reader: ReaderType, buffer: []u8) Self {
-            return .{ .reader = reader, .buffer = buffer, .state = .reading };
-        }
-
-        /// Reads from the body and returns the next chunk it finds.
-        ///
-        /// NOTE: This overwrites its inner buffer on each call,
-        /// therefore the user must copy or use the data before the next call.
-        pub fn next(self: *Self) !?[]const u8 {
-            switch (self.state) {
-                .reading => {
-                    const lf_line = (try self.reader.readUntilDelimiterOrEof(self.buffer, '\n')) orelse
-                        return error.InvalidBody;
-                    const line = try assertLE(lf_line);
-
-                    const index = std.mem.indexOfScalar(u8, line, ';') orelse
-                        line.len;
-
-                    const chunk_len = try std.fmt.parseInt(usize, line[0..index], 10);
-                    if (chunk_len > self.buffer.len) return error.BufferTooSmall;
-                    try self.reader.readNoEof(self.buffer[0..chunk_len]);
-
-                    // validate clrf
-                    var crlf: [2]u8 = undefined;
-                    try self.reader.readNoEof(&crlf);
-                    if (!std.mem.eql(u8, "\r\n", &crlf)) return error.InvalidBody;
-
-                    if (chunk_len == 0) {
-                        self.state = .end;
-                        return null;
-                    } else return self.buffer[0..chunk_len];
-                },
-                .end => return null,
+            if (self.content_length != 0) {
+                const raw_body = try self.gpa.alloc(u8, self.content_length);
+                try self.reader.readNoEof(raw_body);
+                return Event{ .body = raw_body };
             }
-        }
 
-        /// Reads the chunked body and discards all data.
-        /// Does validate correctness of the body.
-        pub fn skip(self: *Self) !void {
-            if (self.state == .end) return;
+            std.debug.assert(self.chunked);
+            var body_list = std.ArrayList(u8).init(self.gpa);
+            defer body_list.deinit();
+
+            var read_len: usize = 0;
             while (true) {
-                const lf_line = (try self.reader.readUntilDelimiterOrEof(self.buffer, '\n')) orelse
+                var len_buf: [1024]u8 = undefined; //Used to read the length of a chunk
+                const lf_line = (try self.reader.readUntilDelimiterOrEof(&len_buf, '\n')) orelse
                     return error.InvalidBody;
                 const line = try assertLE(lf_line);
 
                 const index = std.mem.indexOfScalar(u8, line, ';') orelse
                     line.len;
-
                 const chunk_len = try std.fmt.parseInt(usize, line[0..index], 10);
-                try self.reader.skipBytes(chunk_len, .{ .buf_size = max_buffer_size });
+                try body_list.resize(read_len + chunk_len);
+                try self.reader.readNoEof(body_list.items[read_len..]);
+                read_len += chunk_len;
 
                 // validate clrf
                 var crlf: [2]u8 = undefined;
@@ -548,24 +449,31 @@ fn ChunkedReader(comptime ReaderType: type) type {
                 if (!std.mem.eql(u8, "\r\n", &crlf)) return error.InvalidBody;
 
                 if (chunk_len == 0) {
-                    self.state = .end;
-                    return;
+                    break;
                 }
             }
+            return Event{ .body = body_list.toOwnedSlice() };
+        }
+
+        fn assertKey(key: []const u8) ParseError![]const u8 {
+            const idx = key.len - 1;
+            if (key[idx] != ':') return ParseError.IncorrectHeader;
+            return key[0..idx];
+        }
+
+        fn assertLE(line: []const u8) ParseError![]const u8 {
+            if (line.len == 0) return ParseError.InvalidLineEnding;
+            const idx = line.len - 1;
+            if (line[idx] != '\r') return ParseError.InvalidLineEnding;
+
+            return line[0..idx];
         }
     };
 }
 
-/// initializes a new `ChunkedReader` from a given reader and buffer
-pub fn chunkedReader(reader: anytype, buffer: []u8) ChunkedReader(@TypeOf(reader)) {
-    return ChunkedReader(@TypeOf(reader)).init(reader, buffer);
-}
-
 test "Basic request parse" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const contents = "GET /test?test HTTP/1.1\r\n" ++
+    const contents =
+        "GET /test?test HTTP/1.1\r\n" ++
         "Host: localhost:8080\r\n" ++
         "User-Agent: insomnia/7.1.1\r\n" ++
         "Accept: */*\r\n" ++
@@ -575,21 +483,14 @@ test "Basic request parse" {
 
     var buf: [4096]u8 = undefined;
     const stream = std.io.fixedBufferStream(contents).reader();
-    var ctx = try parseContext(stream, &buf);
+    var request = try parse(std.testing.allocator, stream, &buf);
+    defer std.testing.allocator.free(request.context.raw_body);
 
-    try std.testing.expectEqualStrings("/test", ctx.url.path);
-    try std.testing.expectEqual(Request.Protocol.http_1_1, ctx.protocol);
-    try std.testing.expectEqual(Request.Method.get, ctx.method);
-    // TODO: Find a way to test body
-    // try std.testing.expectEqualStrings("some body", try request.body(&arena.allocator));
+    try std.testing.expectEqualStrings("/test", request.path());
+    try std.testing.expectEqual(Request.Protocol.http_1_1, request.context.protocol);
+    try std.testing.expectEqual(Request.Method.get, request.context.method);
+    try std.testing.expectEqualStrings("some body", request.body());
 
-    var check = false;
-    var request = Request{
-        .arena = undefined,
-        .reader = undefined,
-        .context = ctx,
-        .body_read = &check,
-    };
     var _headers = try request.headers(std.testing.allocator);
     defer {
         var it = _headers.iterator();
@@ -605,7 +506,8 @@ test "Basic request parse" {
 }
 
 test "Request iterator" {
-    const _headers = "User-Agent: ApplePieClient/1\r\n" ++
+    const _headers =
+        "User-Agent: ApplePieClient/1\r\n" ++
         "Accept: application/json\r\n" ++
         "content-Length: 0\r\n";
 
@@ -627,6 +529,12 @@ test "Request iterator" {
 
 test "Chunked encoding" {
     const content =
+        "GET /test?test HTTP/1.1\r\n" ++
+        "Host: localhost:8080\r\n" ++
+        "User-Agent: insomnia/7.1.1\r\n" ++
+        "Accept: */*\r\n" ++
+        "Transfer-Encoding: chunked\r\n" ++
+        "\r\n" ++
         "7\r\n" ++
         "Mozilla\r\n" ++
         "9\r\n" ++
@@ -635,16 +543,11 @@ test "Chunked encoding" {
         "Network\r\n" ++
         "0\r\n" ++
         "\r\n";
+
     var buf: [2048]u8 = undefined;
     var fb = std.io.fixedBufferStream(content).reader();
-    var reader = chunkedReader(fb, &buf);
+    var request = try parse(std.testing.allocator, fb, &buf);
+    defer std.testing.allocator.free(request.body());
 
-    var result: [2048]u8 = undefined;
-    var i: usize = 0;
-    while (try reader.next()) |chunk| {
-        std.mem.copy(u8, result[i..], chunk);
-        i += chunk.len;
-    }
-
-    try std.testing.expectEqualStrings("MozillaDeveloperNetwork", result[0..i]);
+    try std.testing.expectEqualStrings("MozillaDeveloperNetwork", request.body());
 }

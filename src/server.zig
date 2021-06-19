@@ -171,9 +171,7 @@ fn ClientFn(comptime handler: RequestHandler) type {
                 };
 
                 var buffer: [max_request_size]u8 = undefined;
-                var body_read = false;
                 const parsed_request = Request.parse(
-                    &body_read,
                     stack_allocator.get(),
                     std.io.bufferedReader(self.stream.reader()).reader(),
                     &buffer,
@@ -184,33 +182,14 @@ fn ClientFn(comptime handler: RequestHandler) type {
                     else => return response.writeHeader(.bad_request),
                 };
 
-                if (parsed_request.context.protocol == .http_1_1 and parsed_request.context.host == null) {
-                    return response.writeHeader(.bad_request);
-                }
-
                 handler(&response, parsed_request) catch |err| {
                     try response.writeHeader(.bad_request);
                     return err;
                 };
 
                 if (!response.is_flushed) try response.flush(); // ensure data is flushed
-                if (parsed_request.context.should_close) return; // close connection
+                if (parsed_request.context.connection_type == .close) return; // close connection
                 if (!std.io.is_async) return; // io_mode = blocking
-
-                // if the body hasn't been read yet, we skip all body bytes
-                // to ensure the stream is empty before we read the next request.
-                if (!parsed_request.body_read.*) {
-                    if (parsed_request.context.chunked) {
-                        var chunk_buf: [max_buffer_size]u8 = undefined;
-                        var chunked_reader = Request.chunkedReader(parsed_request.reader, &chunk_buf);
-                        try chunked_reader.skip();
-                    } else if (parsed_request.context.content_length > 0) {
-                        try parsed_request.reader.skipBytes(
-                            parsed_request.context.content_length,
-                            .{ .buf_size = 4096 },
-                        );
-                    }
-                }
             }
         }
     };
