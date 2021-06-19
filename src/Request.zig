@@ -510,6 +510,7 @@ fn ChunkedReader(comptime ReaderType: type) type {
                         line.len;
 
                     const chunk_len = try std.fmt.parseInt(usize, line[0..index], 10);
+                    if (chunk_len > self.buffer.len) return error.BufferTooSmall;
                     try self.reader.readNoEof(self.buffer[0..chunk_len]);
 
                     // validate clrf
@@ -539,7 +540,7 @@ fn ChunkedReader(comptime ReaderType: type) type {
                     line.len;
 
                 const chunk_len = try std.fmt.parseInt(usize, line[0..index], 10);
-                try self.reader.readNoEof(self.buffer[0..chunk_len]);
+                try self.reader.skipBytes(chunk_len, .{ .buf_size = max_buffer_size });
 
                 // validate clrf
                 var crlf: [2]u8 = undefined;
