@@ -119,13 +119,14 @@ pub const Context = struct {
     form_type: FormType = .none,
 
     /// Represents the encoding of form data.
-    const FormType = enum {
+    const FormType = union(enum) {
         /// No form data was supplied
         none,
-        /// Uses multipart/form-data
-        multipart,
         /// Uses application/x-www-form-urlencoded
         url_encoded,
+        /// Uses multipart/form-data
+        /// Value contains the boundary  value. Used to find each chunk
+        multipart: []const u8,
     };
 };
 
@@ -274,7 +275,7 @@ const FormIterator = struct {
 
         switch (self.form_type) {
             .none => return null,
-            .multipart => {
+            .multipart => |boundary_name| {
                 return null;
             },
             .url_encoded => {
@@ -388,8 +389,18 @@ fn parseContext(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @
                 if (ctx.form_type == .none and
                     std.ascii.eqlIgnoreCase(header.key, "content-type"))
                 {
-                    if (std.ascii.eqlIgnoreCase(header.value, "multipart/form-data")) {
-                        ctx.form_type = .multipart;
+                    if (std.ascii.indexOfIgnoreCase(header.value, "multipart/form-data")) |_| {
+                        const semicolon = "multipart/form-data".len;
+                        if (header.value[semicolon] != ';') return error.InvalidBody;
+
+                        if (std.mem.indexOfScalarPos(u8, header.value, semicolon, '=')) |eql_char| {
+                            var end = parser.index;
+                            if (buffer[end] == '"') end -= 1; // strip "
+                            var start: usize = end - header.value.len + eql_char + 1;
+                            if (buffer[start] == '"') start += 1; // strip "
+
+                            ctx.form_type = .{ .multipart = buffer[start..end] };
+                        } else return error.InvalidBody;
                     } else if (std.ascii.eqlIgnoreCase(header.value, "application/x-www-form-urlencoded")) {
                         ctx.form_type = .url_encoded;
                     }
@@ -494,9 +505,9 @@ fn Parser(ReaderType: anytype) type {
                 self.state = .body;
                 return Event.end_of_header;
             }
-            var it = mem.tokenize(try assertLE(line), " ");
+            var it = mem.split(try assertLE(line), ": ");
 
-            const key = try assertKey(it.next() orelse return ParseError.MissingHeaders);
+            const key = it.next() orelse return ParseError.MissingHeaders;
             const value = it.next() orelse return ParseError.IncorrectHeader;
 
             // if content length hasn't been set yet,
@@ -564,12 +575,6 @@ fn Parser(ReaderType: anytype) type {
                 }
             }
             return Event{ .body = body_list.toOwnedSlice() };
-        }
-
-        fn assertKey(key: []const u8) ParseError![]const u8 {
-            const idx = key.len - 1;
-            if (key[idx] != ':') return ParseError.IncorrectHeader;
-            return key[0..idx];
         }
 
         fn assertLE(line: []const u8) ParseError![]const u8 {
@@ -672,6 +677,48 @@ test "Form body (url-encoded)" {
         "Content-Type: application/x-www-form-urlencoded\r\n" ++
         "\r\n" ++
         "Field1=value1&Field2=value2";
+
+    var buf: [2048]u8 = undefined;
+    var fb = std.io.fixedBufferStream(content).reader();
+    var request = try parse(std.testing.allocator, fb, &buf);
+    defer std.testing.allocator.free(request.body());
+
+    try std.testing.expectEqualStrings("Field1=value1&Field2=value2", request.body());
+
+    const expected: []const []const u8 = &.{
+        "Field1", "value1", "Field2", "value2",
+    };
+
+    var it = request.formIterator();
+    var index: usize = 0;
+    while (try it.next(std.testing.allocator)) |field| {
+        defer field.deinit(std.testing.allocator);
+        defer index += 2;
+
+        try std.testing.expectEqualStrings(expected[index], field.key);
+        try std.testing.expectEqualStrings(expected[index + 1], field.value);
+    }
+    try std.testing.expectEqual(expected.len, index);
+
+    const check_value = try request.formValue(std.testing.allocator, "Field2");
+    defer if (check_value) |val| std.testing.allocator.free(val);
+    try std.testing.expectEqualStrings("value2", check_value.?);
+}
+
+test "Form body (multipart)" {
+    const content =
+        "POST / HTTP/1.1\r\n" ++
+        "Host: localhost:8080\r\n" ++
+        "Accept: */*\r\n" ++
+        "Content-Length: 27\r\n" ++
+        "Content-Type: multipart/form-data; boundary=\"boundary\"\r\n" ++
+        "\r\n" ++
+        "--boundary\n" ++
+        "Content-Disposition: form-data; name=\"Field1\"\n" ++
+        "value1" ++
+        "--boundary\n" ++
+        "Content-Disposition: form-data; name=\"Field2\"\n" ++
+        "value2";
 
     var buf: [2048]u8 = undefined;
     var fb = std.io.fixedBufferStream(content).reader();
