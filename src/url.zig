@@ -2,8 +2,34 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
-/// QueryParameters is an alias for a String HashMap
-pub const QueryParameters = std.StringHashMap([]const u8);
+/// Wrapping map over a map of keys and values
+/// that provides an easy way to free all its memory.
+pub const KeyValueMap = struct {
+    /// inner map
+    map: MapType,
+
+    const MapType = std.StringHashMapUnmanaged([]const u8);
+
+    /// Frees all memory owned by this `KeyValueMap`
+    pub fn deinit(self: *KeyValueMap, gpa: *Allocator) void {
+        var it = self.map.iterator();
+        while (it.next()) |pair| {
+            gpa.free(pair.key_ptr.*);
+            gpa.free(pair.value_ptr.*);
+        }
+        self.map.deinit(gpa);
+    }
+
+    /// Wrapping method over inner `map`'s `get()` function for easy access
+    pub fn get(self: KeyValueMap, key: []const u8) ?[]const u8 {
+        return self.map.get(key);
+    }
+
+    /// Wrapping method over inner map's `iterator()` function for easy access
+    pub fn iterator(self: KeyValueMap) MapType.Iterator {
+        return self.map.iterator();
+    }
+};
 
 /// Possible errors when parsing query parameters
 const QueryError = error{ MalformedUrl, OutOfMemory, InvalidCharacter };
@@ -35,45 +61,54 @@ pub const Url = struct {
     /// Builds query parameters from url's `raw_query`
     /// Memory is owned by caller
     /// Note: For now, each key/value pair needs to be freed manually
-    pub fn queryParameters(self: Url, allocator: *Allocator) QueryError!QueryParameters {
-        var queries = QueryParameters.init(allocator);
-        errdefer queries.deinit();
-
-        var query = self.raw_query;
-        if (std.mem.startsWith(u8, query, "?")) {
-            query = query[1..];
-        }
-        while (query.len > 0) {
-            var key = query;
-            if (std.mem.indexOfAny(u8, key, "&")) |index| {
-                query = key[index + 1 ..];
-                key = key[0..index];
-            } else {
-                query = "";
-            }
-
-            if (key.len == 0) continue;
-            var value: []const u8 = undefined;
-            if (std.mem.indexOfAny(u8, key, "=")) |index| {
-                value = key[index + 1 ..];
-                key = key[0..index];
-            }
-
-            key = try unescape(allocator, key);
-            errdefer allocator.free(key);
-            value = try unescape(allocator, value);
-            errdefer allocator.free(value);
-
-            try queries.put(key, value);
-        }
-
-        return queries;
+    pub fn queryParameters(self: Url, gpa: *Allocator) QueryError!KeyValueMap {
+        return decodeQueryString(gpa, self.raw_query);
     }
 };
 
-/// Unescapes the given string literal by decoding the %hex number into ascii
-/// memory is owned & freed by caller
-fn unescape(allocator: *Allocator, value: []const u8) QueryError![]const u8 {
+/// Decodes a query string into key-value pairs. This will also
+/// url-decode and replace %<hex> with its ascii value.
+///
+/// Memory is owned by the caller and as each key and value are allocated due to decoding,
+/// must be freed individually
+pub fn decodeQueryString(gpa: *Allocator, data: []const u8) QueryError!KeyValueMap {
+    var queries = KeyValueMap{ .map = KeyValueMap.MapType{} };
+    errdefer queries.deinit(gpa);
+
+    var query = data;
+    if (std.mem.startsWith(u8, query, "?")) {
+        query = query[1..];
+    }
+    while (query.len > 0) {
+        var key = query;
+        if (std.mem.indexOfScalar(u8, key, '&')) |index| {
+            query = key[index + 1 ..];
+            key = key[0..index];
+        } else {
+            query = "";
+        }
+
+        if (key.len == 0) continue;
+        var value: []const u8 = undefined;
+        if (std.mem.indexOfScalar(u8, key, '=')) |index| {
+            value = key[index + 1 ..];
+            key = key[0..index];
+        }
+
+        key = try decode(gpa, key);
+        errdefer gpa.free(key);
+        value = try decode(gpa, value);
+        errdefer gpa.free(value);
+
+        try queries.map.put(gpa, key, value);
+    }
+
+    return queries;
+}
+
+/// Decodes the given input `value` by decoding the %hex number into ascii
+/// memory is owned by caller
+pub fn decode(allocator: *Allocator, value: []const u8) QueryError![]const u8 {
     var perc_counter: usize = 0;
     var has_plus: bool = false;
 
@@ -94,11 +129,17 @@ fn unescape(allocator: *Allocator, value: []const u8) QueryError![]const u8 {
             else => {},
         }
     }
-    if (perc_counter == 0 and !has_plus) return value;
 
     // replace url encoded string
-    var buffer = try allocator.alloc(u8, value.len - 2 * perc_counter);
+    const buffer = try allocator.alloc(u8, value.len - 2 * perc_counter);
     errdefer allocator.free(buffer);
+
+    // No decoding required, so copy into allocated buffer so the result
+    // can be freed consistantly.
+    if (perc_counter == 0 and !has_plus) {
+        std.mem.copy(u8, buffer, value);
+        return buffer;
+    }
 
     i = 0;
     while (i < buffer.len) : (i += 1) {
@@ -243,8 +284,8 @@ test "Retrieve query parameters" {
     const url: Url = Url.init(path);
 
     var query_params = try url.queryParameters(testing.allocator);
-    defer query_params.deinit();
-    try testing.expect(query_params.contains("name"));
+    defer query_params.deinit(testing.allocator);
+    try testing.expect(query_params.map.contains("name"));
     try testing.expectEqualStrings("value", query_params.get("name") orelse " ");
 }
 
