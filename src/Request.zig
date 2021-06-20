@@ -5,7 +5,8 @@ const Request = @This();
 
 const root = @import("root");
 const std = @import("std");
-const Url = @import("url.zig").Url;
+const url = @import("url.zig");
+const Url = url.Url;
 const Allocator = std.mem.Allocator;
 const mem = std.mem;
 const Stream = std.net.Stream;
@@ -114,6 +115,18 @@ pub const Context = struct {
         keep_alive,
         close,
     },
+    /// When form data is supplied, this represents how the data is encoded.
+    form_type: FormType = .none,
+
+    /// Represents the encoding of form data.
+    const FormType = enum {
+        /// No form data was supplied
+        none,
+        /// Uses multipart/form-data
+        multipart,
+        /// Uses application/x-www-form-urlencoded
+        url_encoded,
+    };
 };
 
 /// Iterator to iterate through headers
@@ -200,6 +213,94 @@ pub fn host(self: Request) ?[]const u8 {
     return self.context.host;
 }
 
+/// Returns a `FormIterator` which can be used
+/// to iterate over form fields.
+pub fn formIterator(self: Request) FormIterator {
+    return .{
+        .form_data = self.context.raw_body,
+        .index = 0,
+        .form_type = self.context.form_type,
+    };
+}
+
+/// Searches for a given `key` in the form and returns its value.
+/// Returns `null` when key is not found.
+///
+/// NOTE: As the key and value may be url-encoded, this function requires
+/// allocations to decode them. Only the result must be freed manually,
+/// as this function will handle free'ing any memory that isn't returned to the user.
+///
+/// NOTE2: If retrieving multiple fields, use `formIterator()` or `form()`
+/// as each call to `formValue` will iterate over all fields.
+pub fn formValue(self: Request, gpa: *Allocator, key: []const u8) !?[]const u8 {
+    var it = self.formIterator();
+    return while (try it.next(gpa)) |field| {
+        defer gpa.free(field.key);
+        if (std.mem.eql(u8, key, field.key)) break field.value;
+        gpa.free(field.value); // only free value if it doesn't match the wanted key.
+    } else null;
+}
+
+/// Constructs a map of key-value pairs for each form field.
+/// User is responsible for managing its memory.
+pub fn form(self: Request, gpa: *Allocator) !url.KeyValueMap {
+    return url.decodeQueryString(gpa, self.body());
+}
+
+/// Iterator to find all form fields.
+const FormIterator = struct {
+    form_data: []const u8,
+    index: usize,
+    form_type: Context.FormType,
+
+    /// Represents a key-value pair in a form body
+    const Field = struct {
+        /// Input field
+        key: []const u8,
+        /// Value of the field. Allocated and should be freed manually.
+        value: []const u8,
+
+        /// Frees the memory allocated for the `Field`
+        pub fn deinit(self: Field, gpa: *Allocator) void {
+            gpa.free(self.key);
+            gpa.free(self.value);
+        }
+    };
+
+    /// Finds the next form field. Will return `null` when it reached
+    /// the end of the form.
+    pub fn next(self: *FormIterator, gpa: *Allocator) !?Field {
+        if (self.index >= self.form_data.len) return null;
+
+        switch (self.form_type) {
+            .none => return null,
+            .multipart => {
+                return null;
+            },
+            .url_encoded => {
+                var key = self.form_data[self.index..];
+                if (std.mem.indexOfScalar(u8, key, '&')) |index| {
+                    key = key[0..index];
+                    self.index += key.len + 1;
+                } else self.index += key.len;
+
+                var value: []const u8 = undefined;
+                if (std.mem.indexOfScalar(u8, key, '=')) |index| {
+                    value = key[index + 1 ..];
+                    key = key[0..index];
+                } else return error.InvalidBody;
+
+                const unencoded_key = try url.decode(gpa, key);
+                errdefer gpa.free(unencoded_key);
+                return Field{
+                    .key = unencoded_key,
+                    .value = try url.decode(gpa, value),
+                };
+            },
+        }
+    }
+};
+
 /// Errors which can occur during the parsing of
 /// a HTTP request.
 pub const ParseError = error{
@@ -283,6 +384,16 @@ fn parseContext(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @
 
                 if (ctx.host == null and std.ascii.eqlIgnoreCase(header.key, "host"))
                     ctx.host = header.value;
+
+                if (ctx.form_type == .none and
+                    std.ascii.eqlIgnoreCase(header.key, "content-type"))
+                {
+                    if (std.ascii.eqlIgnoreCase(header.value, "multipart/form-data")) {
+                        ctx.form_type = .multipart;
+                    } else if (std.ascii.eqlIgnoreCase(header.value, "application/x-www-form-urlencoded")) {
+                        ctx.form_type = .url_encoded;
+                    }
+                }
             },
             .end_of_header => ctx.raw_header_data = buffer[parser.header_start..parser.header_end],
             .body => |content| ctx.raw_body = content,
@@ -550,4 +661,41 @@ test "Chunked encoding" {
     defer std.testing.allocator.free(request.body());
 
     try std.testing.expectEqualStrings("MozillaDeveloperNetwork", request.body());
+}
+
+test "Form body (url-encoded)" {
+    const content =
+        "POST / HTTP/1.1\r\n" ++
+        "Host: localhost:8080\r\n" ++
+        "Accept: */*\r\n" ++
+        "Content-Length: 27\r\n" ++
+        "Content-Type: application/x-www-form-urlencoded\r\n" ++
+        "\r\n" ++
+        "Field1=value1&Field2=value2";
+
+    var buf: [2048]u8 = undefined;
+    var fb = std.io.fixedBufferStream(content).reader();
+    var request = try parse(std.testing.allocator, fb, &buf);
+    defer std.testing.allocator.free(request.body());
+
+    try std.testing.expectEqualStrings("Field1=value1&Field2=value2", request.body());
+
+    const expected: []const []const u8 = &.{
+        "Field1", "value1", "Field2", "value2",
+    };
+
+    var it = request.formIterator();
+    var index: usize = 0;
+    while (try it.next(std.testing.allocator)) |field| {
+        defer field.deinit(std.testing.allocator);
+        defer index += 2;
+
+        try std.testing.expectEqualStrings(expected[index], field.key);
+        try std.testing.expectEqualStrings(expected[index + 1], field.value);
+    }
+    try std.testing.expectEqual(expected.len, index);
+
+    const check_value = try request.formValue(std.testing.allocator, "Field2");
+    defer if (check_value) |val| std.testing.allocator.free(val);
+    try std.testing.expectEqualStrings("value2", check_value.?);
 }
