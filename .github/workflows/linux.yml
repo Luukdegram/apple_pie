@@ -18,10 +18,12 @@ jobs:
       with:
         version: master
     
+    - name: Run fmt and ast-check
+      run: |
+        zig fmt src --ast-check --check
+        zig fmt examples --ast-check --check
+
     - name: Run tests
       run: |
         zig build test
 
-    - name: Run fmt
-      run: |
-        zig fmt src
