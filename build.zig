@@ -34,6 +34,9 @@ pub fn build(b: *Builder) void {
             if (std.mem.eql(u8, opt, "template"))
                 break :blk "examples/template.zig";
 
+            if (std.mem.eql(u8, opt, "form"))
+                break :blk "examples/form.zig";
+
             break :blk "examples/basic.zig";
         };
 

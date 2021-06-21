@@ -284,18 +284,18 @@ const FormIterator = struct {
             .none => return null,
             .multipart => |boundary_name| {
                 const data = self.form_data[self.index..];
-                const batch_name = try std.mem.concat(gpa, u8, &.{ "--", boundary_name });
-                defer gpa.free(batch_name);
-
-                var batch_it = std.mem.split(data, batch_name);
+                var batch_name: [72]u8 = undefined;
+                std.mem.copy(u8, &batch_name, "--");
+                std.mem.copy(u8, batch_name[2..], boundary_name);
+                var batch_it = std.mem.split(data, batch_name[0 .. boundary_name.len + 2]);
 
                 var batch = batch_it.next() orelse return error.InvalidBody;
                 batch = batch_it.next() orelse return error.InvalidBody; // Actually get the batch as first one has len 0
                 self.index += batch.len;
-                if (std.mem.eql(u8, batch, "--")) return null; // end of body
+                if (std.mem.startsWith(u8, batch, "--")) return null; // end of body
 
                 var field: Field = undefined;
-                var cur_index = boundary_name.len + 4; // '--' & '\r\n'
+                var cur_index = boundary_name.len + 3; // '--' & '\n'
 
                 // get input name
                 const name_start = std.mem.indexOfPos(u8, batch, cur_index, "name=") orelse return error.InvalidBody;
@@ -304,13 +304,13 @@ const FormIterator = struct {
 
                 var field_end = field_start;
                 for (batch[field_end..]) |c, i| {
-                    if (c == '"' or c == '\r') {
+                    if (c == '"' or c == '\n') {
                         field_end += i;
                         break;
                     }
                 }
                 cur_index = field_end;
-                if (batch[cur_index] == '"') cur_index += 3 else cur_index += 2; // '"' & '\r\n'
+                if (batch[cur_index] == '"') cur_index += 2 else cur_index += 1; // '"' & '\n'
 
                 field.key = try gpa.dupe(u8, batch[field_start..field_end]);
                 errdefer gpa.free(field.key);
@@ -443,7 +443,7 @@ fn parseContext(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @
                             if (buffer[end] != '"') end += 1;
                             var start: usize = parser.index - 2 - header.value.len + eql_char + 1;
                             if (buffer[start] == '"') start += 1; // strip "
-
+                            if (end - start > 70) return error.IncorrectHeader; // Boundary may be at max 70 characters
                             ctx.form_type = .{ .multipart = buffer[start..end] };
                         } else return error.InvalidBody;
                     } else if (std.ascii.eqlIgnoreCase(header.value, "application/x-www-form-urlencoded")) {
@@ -760,15 +760,15 @@ test "Form body (multipart)" {
         "POST / HTTP/1.1\r\n" ++
         "Host: localhost:8080\r\n" ++
         "Accept: */*\r\n" ++
-        "Content-Length: 146\r\n" ++
+        "Content-Length: 140\r\n" ++
         "Content-Type: multipart/form-data; boundary=\"boundary\"\r\n" ++
         "\r\n" ++
-        "--boundary\r\n" ++
-        "Content-Disposition: form-data; name=\"Field1\"\r\n" ++
-        "value1\r\n" ++
-        "--boundary\r\n" ++
-        "Content-Disposition: form-data; name=\"Field2\"\r\n" ++
-        "value2\r\n" ++
+        "--boundary\n" ++
+        "Content-Disposition: form-data; name=\"Field1\"\n" ++
+        "value1\n" ++
+        "--boundary\n" ++
+        "Content-Disposition: form-data; name=\"Field2\"\n" ++
+        "value2\n" ++
         "--boundary--";
 
     var buf: [2048]u8 = undefined;
@@ -776,12 +776,12 @@ test "Form body (multipart)" {
     var request = try parse(std.testing.allocator, fb, &buf);
     defer std.testing.allocator.free(request.body());
 
-    try std.testing.expectEqualStrings("--boundary\r\n" ++
-        "Content-Disposition: form-data; name=\"Field1\"\r\n" ++
-        "value1\r\n" ++
-        "--boundary\r\n" ++
-        "Content-Disposition: form-data; name=\"Field2\"\r\n" ++
-        "value2\r\n" ++
+    try std.testing.expectEqualStrings("--boundary\n" ++
+        "Content-Disposition: form-data; name=\"Field1\"\n" ++
+        "value1\n" ++
+        "--boundary\n" ++
+        "Content-Disposition: form-data; name=\"Field2\"\n" ++
+        "value2\n" ++
         "--boundary--", request.body());
 
     const expected: []const []const u8 = &.{
