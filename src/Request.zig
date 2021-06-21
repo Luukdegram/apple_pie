@@ -245,7 +245,14 @@ pub fn formValue(self: Request, gpa: *Allocator, key: []const u8) !?[]const u8 {
 /// Constructs a map of key-value pairs for each form field.
 /// User is responsible for managing its memory.
 pub fn form(self: Request, gpa: *Allocator) !url.KeyValueMap {
-    return url.decodeQueryString(gpa, self.body());
+    var map = url.KeyValueMap{ .map = .{} };
+    errdefer map.deinit(gpa);
+    var it = self.formIterator();
+    while (try it.next(gpa)) |field| {
+        errdefer field.deinit(gpa);
+        try map.map.put(gpa, field.key, field.value);
+    }
+    return map;
 }
 
 /// Iterator to find all form fields.
@@ -276,7 +283,45 @@ const FormIterator = struct {
         switch (self.form_type) {
             .none => return null,
             .multipart => |boundary_name| {
-                return null;
+                const data = self.form_data[self.index..];
+                const batch_name = try std.mem.concat(gpa, u8, &.{ "--", boundary_name });
+                defer gpa.free(batch_name);
+
+                var batch_it = std.mem.split(data, batch_name);
+
+                var batch = batch_it.next() orelse return error.InvalidBody;
+                batch = batch_it.next() orelse return error.InvalidBody; // Actually get the batch as first one has len 0
+                self.index += batch.len;
+                if (std.mem.eql(u8, batch, "--")) return null; // end of body
+
+                var field: Field = undefined;
+                var cur_index = boundary_name.len + 4; // '--' & '\r\n'
+
+                // get input name
+                const name_start = std.mem.indexOfPos(u8, batch, cur_index, "name=") orelse return error.InvalidBody;
+                var field_start = name_start + "name=".len;
+                if (batch[field_start] == '"') field_start += 1;
+
+                var field_end = field_start;
+                for (batch[field_end..]) |c, i| {
+                    if (c == '"' or c == '\r') {
+                        field_end += i;
+                        break;
+                    }
+                }
+                cur_index = field_end;
+                if (batch[cur_index] == '"') cur_index += 3 else cur_index += 2; // '"' & '\r\n'
+
+                field.key = try gpa.dupe(u8, batch[field_start..field_end]);
+                errdefer gpa.free(field.key);
+
+                var value_list = std.ArrayList(u8).init(gpa);
+                try value_list.ensureTotalCapacity(batch.len - cur_index);
+                defer value_list.deinit();
+
+                for (batch[cur_index..]) |char| if (char != '\r' and char != '\n') value_list.appendAssumeCapacity(char);
+                field.value = value_list.toOwnedSlice();
+                return field;
             },
             .url_encoded => {
                 var key = self.form_data[self.index..];
@@ -703,6 +748,11 @@ test "Form body (url-encoded)" {
     const check_value = try request.formValue(std.testing.allocator, "Field2");
     defer if (check_value) |val| std.testing.allocator.free(val);
     try std.testing.expectEqualStrings("value2", check_value.?);
+
+    var as_map = try request.form(std.testing.allocator);
+    defer as_map.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("value1", as_map.get("Field1").?);
 }
 
 test "Form body (multipart)" {
@@ -747,9 +797,14 @@ test "Form body (multipart)" {
         try std.testing.expectEqualStrings(expected[index], field.key);
         try std.testing.expectEqualStrings(expected[index + 1], field.value);
     }
-    // try std.testing.expectEqual(expected.len, index);
+    try std.testing.expectEqual(expected.len, index);
 
-    // const check_value = try request.formValue(std.testing.allocator, "Field2");
-    // defer if (check_value) |val| std.testing.allocator.free(val);
-    // try std.testing.expectEqualStrings("value2", check_value.?);
+    const check_value = try request.formValue(std.testing.allocator, "Field2");
+    defer if (check_value) |val| std.testing.allocator.free(val);
+    try std.testing.expectEqualStrings("value2", check_value.?);
+
+    var as_map = try request.form(std.testing.allocator);
+    defer as_map.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("value1", as_map.get("Field1").?);
 }
