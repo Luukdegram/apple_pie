@@ -45,7 +45,7 @@ pub fn router(comptime routes: []const Route) RequestHandler {
             const args = Fn.args;
             if (args.len == 2) return route.handler(res, req);
 
-            comptime const ArgType = args[2].arg_type orelse return route.handler(res, req, {});
+            const ArgType = args[2].arg_type orelse return route.handler(res, req, {});
 
             const param: ArgType = switch (ArgType) {
                 []const u8 => if (params.len > 0) params[0].value else &[_]u8{},
