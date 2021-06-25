@@ -15,5 +15,6 @@ pub fn main() !void {
 }
 
 fn index(response: *http.Response, request: http.Request) !void {
+    _ = request;
     try response.writer().writeAll("Hello Zig!");
 }

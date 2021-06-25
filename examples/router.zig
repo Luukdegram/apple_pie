@@ -29,6 +29,7 @@ pub fn main() !void {
 /// Very basic text-based response, it's up to implementation to set
 /// the correct content type of the message
 fn index(response: *http.Response, request: http.Request) !void {
+    _ = request;
     try response.writer().writeAll("Hello Zig!\n");
 }
 
@@ -42,6 +43,7 @@ fn headers(response: *http.Response, request: http.Request) !void {
 
 /// Shows "Hello {name}" where {name} is /hello/:name
 fn hello(resp: *http.Response, req: http.Request, name: []const u8) !void {
+    _ = req;
     try resp.writer().print("Hello {s}\n", .{name});
 }
 
@@ -55,6 +57,7 @@ fn messages(resp: *http.Response, req: http.Request, args: struct {
     post: usize,
     message: []const u8,
 }) !void {
+    _ = req;
     try resp.writer().print("Post {d}, message: '{s}'\n", .{
         args.post,
         args.message,
