@@ -261,6 +261,7 @@ const BufferUtil = struct {
 
 /// Escapes a string by encoding symbols so it can be safely used inside an URL
 fn escape(value: []const u8) []const u8 {
+    _ = value;
     @compileError("TODO: Implement escape()");
 }
 

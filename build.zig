@@ -23,8 +23,6 @@ pub fn build(b: *Builder) void {
     {
         var opt = b.option([]const u8, "example", "The example to build & run") orelse "basic";
         const example_file = blk: {
-            var file: []const u8 = undefined;
-
             if (std.mem.eql(u8, opt, "router"))
                 break :blk "examples/router.zig";
 

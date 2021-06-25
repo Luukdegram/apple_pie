@@ -207,6 +207,7 @@ test "Basic server test" {
         var _addr: net.Address = undefined;
 
         fn index(response: *Response, request: Request) !void {
+            _ = request;
             try response.writer().writeAll(test_message);
         }
         fn runServer(context: *Server) !void {
