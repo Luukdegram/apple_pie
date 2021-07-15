@@ -214,17 +214,18 @@ test "Basic server test" {
     const server_thread = struct {
         var _addr: net.Address = undefined;
 
-        fn index(response: *Response, request: Request) !void {
+        fn index(ctx: void, response: *Response, request: Request) !void {
             _ = request;
+            _ = ctx;
             try response.writer().writeAll(test_message);
         }
         fn runServer(context: *Server) !void {
-            try context.run(alloc, _addr, index);
+            try context.run(alloc, _addr, {}, index);
         }
     };
     server_thread._addr = address;
 
-    const thread = try std.Thread.spawn(server_thread.runServer, &server);
+    const thread = try std.Thread.spawn(.{}, server_thread.runServer, .{&server});
     errdefer server.shutdown();
 
     var stream = while (true) {
@@ -244,7 +245,7 @@ test "Basic server test" {
     var buf: [512]u8 = undefined;
     const len = try stream.reader().read(&buf);
     stream.close();
-    thread.wait();
+    thread.join();
 
     const index = std.mem.indexOf(u8, buf[0..len], "\r\n\r\n") orelse return error.Unexpected;
 
