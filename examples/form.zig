@@ -10,11 +10,13 @@ pub fn main() !void {
     try http.listenAndServe(
         &gpa.allocator,
         try std.net.Address.parseIp("0.0.0.0", 8080),
+        {},
         index,
     );
 }
 
-fn index(response: *http.Response, request: http.Request) !void {
+fn index(ctx: void, response: *http.Response, request: http.Request) !void {
+    _ = ctx;
     if (request.context.method != .post) return response.writer().writeAll("Send me a POST form!");
 
     var form_iterator = request.formIterator();

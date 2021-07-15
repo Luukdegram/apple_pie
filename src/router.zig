@@ -23,7 +23,7 @@ pub const Route = struct {
 
 /// Generic function that inserts each route's path into a radix tree
 /// to retrieve the right route when a request has been made
-pub fn router(comptime routes: []const Route) RequestHandler {
+pub fn Router(comptime Context: type, comptime routes: []const Route) RequestHandler(Context) {
     comptime var trees: [10]trie.Trie(u8) = undefined;
     inline for (trees) |*t| t.* = trie.Trie(u8){};
 
@@ -32,20 +32,29 @@ pub fn router(comptime routes: []const Route) RequestHandler {
 
         const args = @typeInfo(@TypeOf(r.handler)).Fn.args;
 
-        if (args.len < 2) @compileError("Handler must have atleast 2 arguments");
-        if (args[0].arg_type.? != *Response) @compileError("First parameter must be of type " ++ @typeName(*Response));
-        if (args[1].arg_type.? != Request) @compileError("Second parameter must be of type " ++ @typeName(Request));
+        if (args.len < 3) {
+            @compileError("Handler must have atleast 3 arguments");
+        }
+        if (args[0].arg_type.? != Context) {
+            @compileError("Expected type '" ++ @typeName(Context) ++ "', but found type '" ++ @typeName(args[0].arg_type.?) ++ "'");
+        }
+        if (args[1].arg_type.? != *Response) {
+            @compileError("Second parameter must be of type " ++ @typeName(*Response));
+        }
+        if (args[2].arg_type.? != Request) {
+            @compileError("Third parameter must be of type " ++ @typeName(Request));
+        }
 
         trees[@enumToInt(r.method)].insert(r.path, i);
     }
 
     return struct {
-        fn handle(comptime route: Route, params: []const trie.Entry, res: *Response, req: Request) !void {
+        fn handle(comptime route: Route, params: []const trie.Entry, ctx: Context, res: *Response, req: Request) !void {
             const Fn = @typeInfo(@TypeOf(route.handler)).Fn;
             const args = Fn.args;
-            if (args.len == 2) return route.handler(res, req);
+            if (args.len == 3) return route.handler(ctx, res, req);
 
-            const ArgType = args[2].arg_type orelse return route.handler(res, req, {});
+            const ArgType = args[3].arg_type orelse return route.handler(res, req, {});
 
             const param: ArgType = switch (ArgType) {
                 []const u8 => if (params.len > 0) params[0].value else &[_]u8{},
@@ -82,10 +91,10 @@ pub fn router(comptime routes: []const Route) RequestHandler {
                     else => @compileError("Unsupported type " ++ @typeName(ArgType)),
                 },
             };
-            return route.handler(res, req, param);
+            return route.handler(ctx, res, req, param);
         }
 
-        fn serve(response: *Response, request: Request) !void {
+        fn serve(context: Context, response: *Response, request: Request) !void {
             switch (trees[@enumToInt(request.method())].get(request.path())) {
                 .none => {
                     // if nothing was found for current method, try the wildcard
@@ -93,25 +102,25 @@ pub fn router(comptime routes: []const Route) RequestHandler {
                         .none => return response.notFound(),
                         .static => |index| {
                             inline for (routes) |route, i|
-                                if (index == i) return handle(route, &.{}, response, request);
+                                if (index == i) return handle(route, &.{}, context, response, request);
                         },
                         .with_params => |object| {
                             inline for (routes) |route, i| {
                                 if (object.data == i)
-                                    return handle(route, object.params[0..object.param_count], response, request);
+                                    return handle(route, object.params[0..object.param_count], context, response, request);
                             }
                         },
                     }
                 },
                 .static => |index| {
                     inline for (routes) |route, i| {
-                        if (index == i) return handle(route, &.{}, response, request);
+                        if (index == i) return handle(route, &.{}, context, response, request);
                     }
                 },
                 .with_params => |object| {
                     inline for (routes) |route, i| {
                         if (object.data == i)
-                            return handle(route, object.params[0..object.param_count], response, request);
+                            return handle(route, object.params[0..object.param_count], context, response, request);
                     }
                 },
             }

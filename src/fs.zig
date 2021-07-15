@@ -45,7 +45,8 @@ pub const ServeError = error{
 } || Response.Error || std.os.SendFileError || std.fs.File.OpenError;
 
 /// Servers a file based on the path of the request
-pub fn serve(response: *Response, request: Request) ServeError!void {
+pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
+    _ = ctx;
     std.debug.assert(initialized);
     const index = "index.html";
     var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;

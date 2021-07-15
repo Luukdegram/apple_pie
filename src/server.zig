@@ -16,7 +16,9 @@ const Allocator = std.mem.Allocator;
 const Queue = atomic.Queue;
 
 /// User API function signature of a request handler
-pub const RequestHandler = fn handle(*Response, Request) anyerror!void;
+pub fn RequestHandler(comptime Context: type) type {
+    return fn handle(Context, *Response, Request) anyerror!void;
+}
 
 /// Allows users to set the max buffer size before we allocate memory on the heap to store our data
 const max_buffer_size = blk: {
@@ -45,10 +47,13 @@ pub fn listenAndServe(
     gpa: *Allocator,
     /// Address the server is listening at
     address: net.Address,
+    /// Allows passing a context that is available to all handler function pointers.
+    /// User must ensure thread-safety when accessing the context.
+    context: anytype,
     /// User defined `Request`/`Response` handler
-    comptime handler: RequestHandler,
+    comptime handler: RequestHandler(@TypeOf(context)),
 ) !void {
-    try (Server.init()).run(gpa, address, handler);
+    try (Server.init()).run(gpa, address, context, handler);
 }
 
 pub const Server = struct {
@@ -68,14 +73,17 @@ pub const Server = struct {
         gpa: *Allocator,
         /// Address the server is listening at
         address: net.Address,
+        /// Runtime context allowing to pass data between handlers.
+        /// Thread-safety must be guaranteed by the caller.
+        context: anytype,
         /// User defined `Request`/`Response` handler
-        comptime handler: RequestHandler,
+        comptime handler: RequestHandler(@TypeOf(context)),
     ) !void {
         var stream = net.StreamServer.init(.{ .reuse_address = true });
         defer stream.deinit();
 
         // client queue to clean up clients after connection is broken/finished
-        const Client = ClientFn(handler);
+        const Client = ClientFn(@TypeOf(context), handler);
         var clients = Queue(*Client).init();
 
         // Force clean up any remaining clients that are still connected
@@ -102,7 +110,7 @@ pub const Server = struct {
             client.* = Client{
                 .stream = connection.stream,
                 .node = .{ .data = client },
-                .frame = async client.run(gpa, &clients),
+                .frame = async client.run(gpa, &clients, context),
             };
 
             while (clients.get()) |node| {
@@ -122,7 +130,7 @@ pub const Server = struct {
 /// Generic Client handler wrapper around the given `T` of `RequestHandler`.
 /// Allows us to wrap our client connection base around the given user defined handler
 /// without allocating data on the heap for it
-fn ClientFn(comptime handler: RequestHandler) type {
+fn ClientFn(comptime Context: type, comptime handler: RequestHandler(Context)) type {
     return struct {
         const Self = @This();
 
@@ -139,8 +147,8 @@ fn ClientFn(comptime handler: RequestHandler) type {
         /// Same for blocking instances, to ensure multiple clients can connect (synchronously).
         /// NOTE: This is a wrapper function around `handle` so we can catch any errors and handle them accordingly
         /// as we do not want to crash the server when an error occurs.
-        fn run(self: *Self, gpa: *Allocator, clients: *Queue(*Self)) void {
-            self.handle(gpa, clients) catch |err| {
+        fn run(self: *Self, gpa: *Allocator, clients: *Queue(*Self), context: Context) void {
+            self.handle(gpa, clients, context) catch |err| {
                 log.err("An error occured handling request: '{s}'", .{@errorName(err)});
                 if (@errorReturnTrace()) |trace| {
                     std.debug.dumpStackTrace(trace.*);
@@ -148,7 +156,7 @@ fn ClientFn(comptime handler: RequestHandler) type {
             };
         }
 
-        fn handle(self: *Self, gpa: *Allocator, clients: *Queue(*Self)) !void {
+        fn handle(self: *Self, gpa: *Allocator, clients: *Queue(*Self), context: Context) !void {
             defer {
                 self.stream.close();
                 clients.put(&self.node);
@@ -182,7 +190,7 @@ fn ClientFn(comptime handler: RequestHandler) type {
                     else => return response.writeHeader(.bad_request),
                 };
 
-                handler(&response, parsed_request) catch |err| {
+                handler(context, &response, parsed_request) catch |err| {
                     try response.writeHeader(.bad_request);
                     return err;
                 };
