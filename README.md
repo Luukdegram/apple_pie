@@ -25,19 +25,28 @@ pub const buffer_size: usize = 4096;
 // optional root constant to define max header size per request
 pub const request_buffer_size: usize = 4096;
 
+/// Context variable, accessible by all handlers, allowing to access data objects
+/// without requiring them to be global. Thread-safety must be handled by the user.
+const Context = struct {
+	data: []const u8,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-
+	
+	const my_context: Context = .{ .data = "Hello, world!" };
+	
     try http.listenAndServe(
         &gpa.allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),
+        my_context,
         index,
     );
 }
 
-fn index(response: *http.Response, request: http.Request) !void {
-    try response.writer().writeAll("Hello Zig!");
+fn index(ctx: Context, response: *http.Response, request: http.Request) !void {
+    try response.writer().print("{s}", {ctx.data});
 }
 ```
 
@@ -54,4 +63,4 @@ To build any of the examples, use the following:
 ```
 zig build example -Dexample=<example_name>
 ```
-it will appear in `zig-cache/bin/example_name`
+it will appear in `zig-out/bin/example_name`
