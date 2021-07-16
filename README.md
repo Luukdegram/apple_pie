@@ -28,14 +28,14 @@ pub const request_buffer_size: usize = 4096;
 /// Context variable, accessible by all handlers, allowing to access data objects
 /// without requiring them to be global. Thread-safety must be handled by the user.
 const Context = struct {
-	data: []const u8,
+    data: []const u8,
 };
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 	
-	const my_context: Context = .{ .data = "Hello, world!" };
+    const my_context: Context = .{ .data = "Hello, world!" };
 	
     try http.listenAndServe(
         &gpa.allocator,
