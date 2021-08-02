@@ -238,21 +238,24 @@ test "Basic server test" {
     const alloc = std.testing.allocator;
     const test_message = "Hello, Apple pie!";
     const address = try net.Address.parseIp("0.0.0.0", 8080);
-    var server = Server.init();
 
     const server_thread = struct {
-        var _addr: net.Address = undefined;
-
         fn index(ctx: void, response: *Response, request: Request) !void {
             _ = request;
             _ = ctx;
             try response.writer().writeAll(test_message);
         }
-        fn runServer(context: *Server) !void {
-            try context.run(alloc, _addr, {}, index);
+        fn runServer(context: *Server(void, index)) !void {
+            try context.run();
         }
     };
-    server_thread._addr = address;
+    var server = Server(void, server_thread.index).init(
+        alloc,
+        address,
+        {},
+    );
+
+    try server.start();
 
     const thread = try std.Thread.spawn(.{}, server_thread.runServer, .{&server});
     errdefer server.shutdown();
