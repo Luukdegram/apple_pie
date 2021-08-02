@@ -53,79 +53,108 @@ pub fn listenAndServe(
     /// User defined `Request`/`Response` handler
     comptime handler: RequestHandler(@TypeOf(context)),
 ) !void {
-    try (Server.init()).run(gpa, address, context, handler);
+    try (Server(@TypeOf(context)).init(gpa, address, context, handler)).run();
 }
 
-pub const Server = struct {
-    should_quit: atomic.Atomic(bool),
+pub fn Server(comptime Context: type, comptime handler: RequestHandler(Context)) type {
+    return struct {
+        const Self = @This();
 
-    /// Initializes a new `Server` instance
-    pub fn init() Server {
-        return .{ .should_quit = atomic.Atomic(bool).init(false) };
-    }
+        const Client = ClientFn(Context, handler);
+        should_quit: atomic.Atomic(bool),
 
-    /// Starts listening to new connections and serves the responses
-    /// Cleans up any resources that were allocated during the connection
-    pub fn run(
-        self: *Server,
-        /// Memory allocator, for general usage.
-        /// Will be used to setup an arena to free any request/response data.
         gpa: *Allocator,
-        /// Address the server is listening at
         address: net.Address,
-        /// Runtime context allowing to pass data between handlers.
-        /// Thread-safety must be guaranteed by the caller.
-        context: anytype,
-        /// User defined `Request`/`Response` handler
-        comptime handler: RequestHandler(@TypeOf(context)),
-    ) !void {
-        var stream = net.StreamServer.init(.{ .reuse_address = true });
-        defer stream.deinit();
+        context: Context,
+
+        stream: net.StreamServer,
 
         // client queue to clean up clients after connection is broken/finished
-        const Client = ClientFn(@TypeOf(context), handler);
-        var clients = Queue(*Client).init();
+        clients: Queue(*Client),
 
-        // Force clean up any remaining clients that are still connected
-        // if an error occured
-        defer while (clients.get()) |node| {
-            const data = node.data;
-            data.stream.close();
-            gpa.destroy(data);
-        };
-
-        try stream.listen(address);
-
-        while (!self.should_quit.load(.SeqCst)) {
-            var connection = stream.accept() catch |err| switch (err) {
-                error.ConnectionResetByPeer, error.ConnectionAborted => {
-                    log.err("Could not accept connection: '{s}'", .{@errorName(err)});
-                    continue;
-                },
-                else => return err,
+        /// Initializes a new `Server` instance
+        pub fn init(
+            /// Memory allocator, for general usage.
+            /// Will be used to setup an arena to free any request/response data.
+            gpa: *Allocator,
+            /// Address the server is listening at
+            address: net.Address,
+            /// Runtime context allowing to pass data between handlers.
+            /// Thread-safety must be guaranteed by the caller.
+            context: Context,
+        ) Self {
+            return Self{
+                .should_quit = atomic.Atomic(bool).init(false),
+                .gpa = gpa,
+                .address = address,
+                .context = context,
+                .stream = net.StreamServer.init(.{ .reuse_address = true }),
+                .clients = Queue(*Client).init(),
             };
+        }
 
-            // setup client connection and handle it
-            const client = try gpa.create(Client);
-            client.* = Client{
-                .stream = connection.stream,
-                .node = .{ .data = client },
-                .frame = async client.run(gpa, &clients, context),
-            };
-
-            while (clients.get()) |node| {
+        pub fn deinit(self: *Self) void {
+            self.shutdown();
+            // Force clean up any remaining clients that are still connected
+            // if an error occured
+            while (self.clients.get()) |node| {
                 const data = node.data;
-                await data.frame;
-                gpa.destroy(data);
+                data.stream.close();
+                self.gpa.destroy(data);
+            }
+            self.stream.deinit();
+            self.* = undefined;
+        }
+
+        pub fn start(self: *Self) !void {
+            try self.stream.listen(self.address);
+        }
+
+        pub fn getContext(self: *Self) !*Client {
+            while (!self.should_quit.load(.SeqCst)) {
+                var connection = self.stream.accept() catch |err| switch (err) {
+                    error.ConnectionResetByPeer, error.ConnectionAborted => {
+                        log.err("Could not accept connection: '{s}'", .{@errorName(err)});
+                        continue;
+                    },
+                    else => return err,
+                };
+
+                // setup client connection and handle it
+                const client = try self.gpa.create(Client);
+                client.* = Client{
+                    .stream = connection.stream,
+                    .node = .{ .data = client },
+                    .frame = async client.run(self.gpa, &self.clients, self.context),
+                };
+                return client;
+            }
+            return error.ServerShutdown;
+        }
+
+        /// Starts listening to new connections and serves the responses
+        /// Cleans up any resources that were allocated during the connection
+        pub fn run(self: *Self) !void {
+            while (!self.should_quit.load(.SeqCst)) {
+                const client = try self.getContext();
+
+                _ = client;
+
+                while (self.clients.get()) |node| {
+                    const data = node.data;
+                    await data.frame;
+                    self.gpa.destroy(data);
+                }
             }
         }
-    }
 
-    /// Tells the server to shutdown
-    pub fn shutdown(self: *Server) void {
-        self.should_quit.store(true, .SeqCst);
-    }
-};
+        /// Tells the server to shutdown
+        pub fn shutdown(self: *Self) void {
+            self.stream.close();
+            self.should_quit.store(true, .SeqCst);
+        }
+    };
+}
 
 /// Generic Client handler wrapper around the given `T` of `RequestHandler`.
 /// Allows us to wrap our client connection base around the given user defined handler
