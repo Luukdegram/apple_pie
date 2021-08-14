@@ -287,7 +287,7 @@ const FormIterator = struct {
                 var batch_name: [72]u8 = undefined;
                 std.mem.copy(u8, &batch_name, "--");
                 std.mem.copy(u8, batch_name[2..], boundary_name);
-                var batch_it = std.mem.split(data, batch_name[0 .. boundary_name.len + 2]);
+                var batch_it = std.mem.split(u8, data, batch_name[0 .. boundary_name.len + 2]);
 
                 var batch = batch_it.next() orelse return error.InvalidBody;
                 batch = batch_it.next() orelse return error.InvalidBody; // Actually get the batch as first one has len 0
