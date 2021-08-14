@@ -58,7 +58,7 @@ pub fn Trie(comptime T: type) type {
             if (path[0] != '/') @compileError("Path must start with /");
             if (comptime std.mem.count(u8, path, ":") > max_params) @compileError("This path contains too many parameters");
 
-            comptime var it = std.mem.split(path[1..], "/");
+            comptime var it = std.mem.split(u8, path[1..], "/");
             comptime var current = &self.root;
             comptime {
                 loop: while (it.next()) |component| {
@@ -107,7 +107,7 @@ pub fn Trie(comptime T: type) type {
             var params: [max_params]Entry = undefined;
             var param_count: usize = 0;
             var current = &self.root;
-            var it = std.mem.split(path[1..], "/");
+            var it = std.mem.split(u8, path[1..], "/");
             var index: usize = 0;
 
             loop: while (it.next()) |component| {
