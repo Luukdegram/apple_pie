@@ -524,7 +524,7 @@ fn Parser(ReaderType: anytype) type {
             const line = (try self.reader.readUntilDelimiterOrEof(self.buffer, '\n')) orelse return ParseError.EndOfStream;
             self.index += line.len + 1;
             self.header_start = self.index;
-            var it = mem.tokenize(try assertLE(line), " ");
+            var it = mem.tokenize(u8, try assertLE(line), " ");
 
             const parsed_method = it.next() orelse return ParseError.InvalidMethod;
             const parsed_path = it.next() orelse return ParseError.InvalidUrl;
@@ -550,7 +550,7 @@ fn Parser(ReaderType: anytype) type {
                 self.state = .body;
                 return Event.end_of_header;
             }
-            var it = mem.split(try assertLE(line), ": ");
+            var it = mem.split(u8, try assertLE(line), ": ");
 
             const key = it.next() orelse return ParseError.MissingHeaders;
             const value = it.next() orelse return ParseError.IncorrectHeader;
@@ -567,7 +567,7 @@ fn Parser(ReaderType: anytype) type {
             if (std.ascii.eqlIgnoreCase("transfer-encoding", key)) {
                 // transfer-encoding can contain a list of encodings.
                 // Therefore, iterate over them and check for 'chunked'.
-                var split = std.mem.split(value, ", ");
+                var split = std.mem.split(u8, value, ", ");
                 while (split.next()) |maybe_chunk| {
                     if (std.ascii.eqlIgnoreCase("chunked", maybe_chunk)) {
                         self.chunked = true;
