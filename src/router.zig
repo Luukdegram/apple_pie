@@ -49,6 +49,8 @@ pub fn Router(comptime Context: type, comptime routes: []const Route) RequestHan
     }
 
     return struct {
+        const Inner = @This();
+
         fn handle(comptime route: Route, params: []const trie.Entry, ctx: Context, res: *Response, req: Request) !void {
             const Fn = @typeInfo(@TypeOf(route.handler)).Fn;
             const args = Fn.args;
@@ -102,25 +104,25 @@ pub fn Router(comptime Context: type, comptime routes: []const Route) RequestHan
                         .none => return response.notFound(),
                         .static => |index| {
                             inline for (routes) |route, i|
-                                if (index == i) return handle(route, &.{}, context, response, request);
+                                if (index == i) return Inner.handle(route, &.{}, context, response, request);
                         },
                         .with_params => |object| {
                             inline for (routes) |route, i| {
                                 if (object.data == i)
-                                    return handle(route, object.params[0..object.param_count], context, response, request);
+                                    return Inner.handle(route, object.params[0..object.param_count], context, response, request);
                             }
                         },
                     }
                 },
                 .static => |index| {
                     inline for (routes) |route, i| {
-                        if (index == i) return handle(route, &.{}, context, response, request);
+                        if (index == i) return Inner.handle(route, &.{}, context, response, request);
                     }
                 },
                 .with_params => |object| {
                     inline for (routes) |route, i| {
                         if (object.data == i)
-                            return handle(route, object.params[0..object.param_count], context, response, request);
+                            return Inner.handle(route, object.params[0..object.param_count], context, response, request);
                     }
                 },
             }
