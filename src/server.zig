@@ -191,7 +191,7 @@ fn ClientFn(comptime Context: type, comptime handler: RequestHandler(Context)) t
                 };
 
                 handler(context, &response, parsed_request) catch |err| {
-                    try response.writeHeader(.bad_request);
+                    try response.writeHeader(.internal_server_error);
                     return err;
                 };
 
