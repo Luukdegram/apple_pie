@@ -7,11 +7,10 @@
 const std = @import("std");
 const root = @import("root");
 const Request = @import("Request.zig");
-const resp = @import("response.zig");
+const Response = @import("Response.zig");
 const net = std.net;
 const atomic = std.atomic;
 const log = std.log.scoped(.apple_pie);
-const Response = resp.Response;
 const Allocator = std.mem.Allocator;
 const Queue = atomic.Queue;
 
@@ -131,6 +130,7 @@ pub const Server = struct {
 /// Allows us to wrap our client connection base around the given user defined handler
 /// without allocating data on the heap for it
 fn ClientFn(comptime Context: type, comptime handler: RequestHandler(Context)) type {
+    _ = handler;
     return struct {
         const Self = @This();
 
@@ -172,7 +172,7 @@ fn ClientFn(comptime Context: type, comptime handler: RequestHandler(Context)) t
                 defer body.deinit();
 
                 var response = Response{
-                    .headers = resp.Headers.init(stack_allocator.get()),
+                    .headers = Response.Headers.init(stack_allocator.get()),
                     .buffered_writer = std.io.bufferedWriter(self.stream.writer()),
                     .is_flushed = false,
                     .body = body.writer(),

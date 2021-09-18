@@ -8,7 +8,7 @@
 const std = @import("std");
 const trie = @import("trie.zig");
 const Request = @import("Request.zig");
-const Response = @import("response.zig").Response;
+const Response = @import("Response.zig");
 const RequestHandler = @import("server.zig").RequestHandler;
 
 /// Contains a path and a handler function that

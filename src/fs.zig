@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const Request = @import("Request.zig");
-const Response = @import("response.zig").Response;
+const Response = @import("Response.zig");
 const MimeType = @import("mime_type.zig").MimeType;
 const url = @import("url.zig");
 const Allocator = std.mem.Allocator;

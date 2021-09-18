@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 
 /// HTTP Status codes according to `rfc7231`
 /// https://tools.ietf.org/html/rfc7231#section-6
-pub const StatusCode = enum(u16) {
+pub const Status = enum(u16) {
     // Informational 1xx
     @"continue" = 100,
     // Successful 2xx
@@ -62,9 +62,9 @@ pub const StatusCode = enum(u16) {
     http_version_not_supported = 505,
     _,
 
-    /// Returns the string value of a `StatusCode`
+    /// Returns the string value of a `Status`
     /// for example: .ResetContent returns "Returns Content".
-    pub fn toString(self: StatusCode) []const u8 {
+    pub fn toString(self: Status) []const u8 {
         return switch (self) {
             .@"continue" => "Continue",
             .switching_protocols => "Switching Protocols",
@@ -118,84 +118,82 @@ pub const StatusCode = enum(u16) {
 pub const Headers = std.StringArrayHashMap([]const u8);
 
 /// Response allows to set the status code and content of the response
-pub const Response = struct {
-    pub const Status = StatusCode;
+const Response = @This();
 
-    /// status code of the response, 200 by default
-    status_code: StatusCode = .ok,
-    /// StringHashMap([]const u8) with key and value of headers
-    headers: Headers,
-    /// Buffered writer that writes to our socket
-    buffered_writer: std.io.BufferedWriter(4096, net.Stream.Writer),
-    /// True when write() has been called
-    is_flushed: bool,
-    /// Response body, can be written to through the writer interface
-    body: std.ArrayList(u8).Writer,
+/// status code of the response, 200 by default
+status_code: Status = .ok,
+/// StringHashMap([]const u8) with key and value of headers
+headers: Headers,
+/// Buffered writer that writes to our socket
+buffered_writer: std.io.BufferedWriter(4096, net.Stream.Writer),
+/// True when write() has been called
+is_flushed: bool,
+/// Response body, can be written to through the writer interface
+body: std.ArrayList(u8).Writer,
 
-    pub const Error = net.Stream.WriteError || error{OutOfMemory};
+pub const Error = net.Stream.WriteError || error{OutOfMemory};
 
-    pub const Writer = std.io.Writer(*Response, Error, write);
+pub const Writer = std.io.Writer(*Response, Error, write);
 
-    /// Returns a writer interface, any data written to the writer
-    /// will be appended to the response's body
-    pub fn writer(self: *Response) Writer {
-        return .{ .context = self };
+/// Returns a writer interface, any data written to the writer
+/// will be appended to the response's body
+pub fn writer(self: *Response) Writer {
+    return .{ .context = self };
+}
+
+/// Appends the buffer to the body of the response
+fn write(self: *Response, buffer: []const u8) Error!usize {
+    return self.body.write(buffer);
+}
+
+/// Sends a status code with an empty body and the current headers to the client
+/// Note that this will complete the response and any further writes are illegal.
+pub fn writeHeader(self: *Response, status_code: Status) Error!void {
+    self.status_code = status_code;
+    // reset body to wipe any user written data
+    self.body.context.items.len = 0;
+    try self.body.print("{s}\n", .{self.status_code.toString()});
+    try self.flush();
+}
+
+/// Sends the response to the client, can only be called once
+/// Any further calls is a panic
+pub fn flush(self: *Response) Error!void {
+    std.debug.assert(!self.is_flushed);
+    self.is_flushed = true;
+
+    const body = self.body.context.items;
+    var socket = self.buffered_writer.writer();
+
+    // Print the status line, we only support HTTP/1.1 for now
+    try socket.print("HTTP/1.1 {d} {s}\r\n", .{ @enumToInt(self.status_code), self.status_code.toString() });
+
+    // write headers
+    var header_it = self.headers.iterator();
+    while (header_it.next()) |header| {
+        try socket.print("{s}: {s}\r\n", .{ header.key_ptr.*, header.value_ptr.* });
     }
 
-    /// Appends the buffer to the body of the response
-    fn write(self: *Response, buffer: []const u8) Error!usize {
-        return self.body.write(buffer);
+    // If user has not set content-length, we add it calculated by the length of the body
+    if (body.len > 0 and !self.headers.contains("Content-Length")) {
+        try socket.print("Content-Length: {d}\r\n", .{body.len});
     }
 
-    /// Sends a status code with an empty body and the current headers to the client
-    /// Note that this will complete the response and any further writes are illegal.
-    pub fn writeHeader(self: *Response, status_code: StatusCode) Error!void {
-        self.status_code = status_code;
-        // reset body to wipe any user written data
-        self.body.context.items.len = 0;
-        try self.body.print("{s}\n", .{self.status_code.toString()});
-        try self.flush();
+    // set default Content-Type.
+    // Adding headers is expensive so add it as default when we write to the socket
+    if (!self.headers.contains("Content-Type")) {
+        try socket.writeAll("Content-Type: text/plain; charset=utf-8\r\n");
     }
 
-    /// Sends the response to the client, can only be called once
-    /// Any further calls is a panic
-    pub fn flush(self: *Response) Error!void {
-        std.debug.assert(!self.is_flushed);
-        self.is_flushed = true;
+    try socket.writeAll("Connection: keep-alive\r\n");
 
-        const body = self.body.context.items;
-        var socket = self.buffered_writer.writer();
+    try socket.writeAll("\r\n");
+    if (body.len > 0) try socket.writeAll(body);
+    try self.buffered_writer.flush(); // ensure everything is written
+}
 
-        // Print the status line, we only support HTTP/1.1 for now
-        try socket.print("HTTP/1.1 {d} {s}\r\n", .{ @enumToInt(self.status_code), self.status_code.toString() });
-
-        // write headers
-        var header_it = self.headers.iterator();
-        while (header_it.next()) |header| {
-            try socket.print("{s}: {s}\r\n", .{ header.key_ptr.*, header.value_ptr.* });
-        }
-
-        // If user has not set content-length, we add it calculated by the length of the body
-        if (body.len > 0 and !self.headers.contains("Content-Length")) {
-            try socket.print("Content-Length: {d}\r\n", .{body.len});
-        }
-
-        // set default Content-Type.
-        // Adding headers is expensive so add it as default when we write to the socket
-        if (!self.headers.contains("Content-Type")) {
-            try socket.writeAll("Content-Type: text/plain; charset=utf-8\r\n");
-        }
-
-        try socket.writeAll("Connection: keep-alive\r\n");
-
-        try socket.writeAll("\r\n");
-        if (body.len > 0) try socket.writeAll(body);
-        try self.buffered_writer.flush(); // ensure everything is written
-    }
-
-    /// Sends a `404 - Resource not found` response
-    pub fn notFound(self: *Response) Error!void {
-        self.status_code = .not_found;
-        try self.body.writeAll("Resource not found\n");
-    }
-};
+/// Sends a `404 - Resource not found` response
+pub fn notFound(self: *Response) Error!void {
+    self.status_code = .not_found;
+    try self.body.writeAll("Resource not found\n");
+}
