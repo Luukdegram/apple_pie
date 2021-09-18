@@ -119,6 +119,8 @@ pub const Headers = std.StringArrayHashMap([]const u8);
 
 /// Response allows to set the status code and content of the response
 pub const Response = struct {
+    pub const Status = StatusCode;
+
     /// status code of the response, 200 by default
     status_code: StatusCode = .ok,
     /// StringHashMap([]const u8) with key and value of headers
