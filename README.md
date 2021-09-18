@@ -1,6 +1,6 @@
 # Apple Pie
 
-Apple pie is HTTP Server implementation in [Zig](https://ziglang.org). The initial goal is to offer full support for http versions 1.0 and 1.1 with 2.0 and further planned at a later stage. With Apple Pie I'd like to offer a library that contains all features you'd expect from a server, while still remaining performant. Rather than hiding complexity, I want to expose its functionality so users can replace and/or expand upon to fit their needs.
+Apple pie is a HTTP Server implementation in [Zig](https://ziglang.org). The initial goal is to offer full support for http versions 1.0 and 1.1 with 2.0 and further planned at a later stage. With Apple Pie I'd like to offer a library that contains all features you'd expect from a server, while still remaining performant. Rather than hiding complexity, I want to expose its functionality so users can replace and/or expand upon to fit their needs.
 
 ## Roadmap
 - HTTP 1.1 spec (fully) implemented
