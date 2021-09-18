@@ -417,6 +417,7 @@ fn parseContext(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @
         switch (event) {
             .status => |status| {
                 ctx.protocol = Request.Protocol.fromString(status.protocol);
+                ctx.connection_type = if (ctx.protocol == .http_1_0) .close else .keep_alive;
                 ctx.url = Url.init(status.path);
                 ctx.method = Request.Method.fromString(status.method);
             },
