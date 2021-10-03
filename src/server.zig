@@ -176,6 +176,7 @@ fn ClientFn(comptime Context: type, comptime handler: RequestHandler(Context)) t
                     .buffered_writer = std.io.bufferedWriter(self.stream.writer()),
                     .is_flushed = false,
                     .body = body.writer(),
+                    .close = false,
                 };
 
                 var buffer: [max_request_size]u8 = undefined;
@@ -190,14 +191,16 @@ fn ClientFn(comptime Context: type, comptime handler: RequestHandler(Context)) t
                     else => return response.writeHeader(.bad_request),
                 };
 
+                // Default close to true if the client requests the connection to close or if the io_mode == blocking.
+                response.close = parsed_request.context.connection_type == .close or !std.io.is_async;
+
                 handler(context, &response, parsed_request) catch |err| {
                     try response.writeHeader(.internal_server_error);
                     return err;
                 };
 
                 if (!response.is_flushed) try response.flush(); // ensure data is flushed
-                if (parsed_request.context.connection_type == .close) return; // close connection
-                if (!std.io.is_async) return; // io_mode = blocking
+                if (response.close) return; // close connection
             }
         }
     };
