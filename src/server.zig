@@ -207,7 +207,7 @@ fn ClientFn(comptime Context: type, comptime handler: RequestHandler(Context)) t
 }
 
 test "Basic server test" {
-    if (std.builtin.single_threaded) return error.SkipZigTest;
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
 
     const alloc = std.testing.allocator;
     const test_message = "Hello, Apple pie!";
