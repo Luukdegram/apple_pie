@@ -46,7 +46,8 @@ pub fn main() !void {
 }
 
 fn index(ctx: Context, response: *http.Response, request: http.Request) !void {
-    try response.writer().print("{s}", {ctx.data});
+    _ = request;
+    try response.writer().print("{s}", .{ctx.data});
 }
 ```
 
