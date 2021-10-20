@@ -182,7 +182,7 @@ pub const Response = struct {
         }
 
         // If user has not set content-length, we add it calculated by the length of the body
-        if (body.len > 0 and !self.headers.contains("Content-Length")) {
+        if (!self.headers.contains("Content-Length")) {
             try socket.print("Content-Length: {d}\r\n", .{body.len});
         }
 
