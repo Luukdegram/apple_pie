@@ -72,7 +72,7 @@ fn hello(ctx: *Context, resp: *http.Response, req: http.Request, name: []const u
 /// Serves a file
 fn serveFs(ctx: *Context, resp: *http.Response, req: http.Request) !void {
     _ = ctx;
-    try fs.serve(resp, req);
+    try fs.serve({}, resp, req);
 }
 
 /// Shows the post number and message text
