@@ -101,7 +101,11 @@ pub fn Trie(comptime T: type) type {
         /// If a colon is found, it will add the path piece onto the param list
         pub fn get(self: *Self, path: []const u8) Result {
             if (path.len == 1) {
-                return .{ .static = self.root.data.? };
+                if (self.root.data) |data| {
+                    return .{ .static = data };
+                } else {
+                    return .none;
+                }
             }
 
             var params: [max_params]Entry = undefined;
