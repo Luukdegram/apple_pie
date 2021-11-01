@@ -217,3 +217,11 @@ test "Insert and retrieve paths with same prefix" {
 
     try std.testing.expectEqualStrings("1337", res4.with_params.params[0].value);
 }
+
+test "Get root" {
+    comptime var trie = Trie(u32){};
+    comptime trie.insert("/api", 1);
+
+    const res = trie.get("/");
+    try std.testing.expect(res == .none);
+}
