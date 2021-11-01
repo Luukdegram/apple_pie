@@ -176,22 +176,22 @@ test "Insert and retrieve" {
     const res6 = trie.get("/topics/5/");
     const res7 = trie.get("/bar");
 
-    std.testing.expectEqual(@as(u32, 1), res.with_params.data);
-    std.testing.expectEqual(@as(u32, 2), res2.with_params.data);
-    std.testing.expectEqual(@as(u32, 2), res2a.with_params.data);
-    std.testing.expectEqual(@as(u32, 3), res3.with_params.data);
-    std.testing.expect(res4 == .none);
-    std.testing.expectEqual(@as(u32, 4), res5.with_params.data);
-    std.testing.expectEqual(@as(u32, 4), res6.with_params.data);
-    std.testing.expectEqual(@as(u32, 5), res7.static);
+    try std.testing.expectEqual(@as(u32, 1), res.with_params.data);
+    try std.testing.expectEqual(@as(u32, 2), res2.with_params.data);
+    try std.testing.expectEqual(@as(u32, 2), res2a.with_params.data);
+    try std.testing.expectEqual(@as(u32, 3), res3.with_params.data);
+    try std.testing.expect(res4 == .none);
+    try std.testing.expectEqual(@as(u32, 4), res5.with_params.data);
+    try std.testing.expectEqual(@as(u32, 4), res6.with_params.data);
+    try std.testing.expectEqual(@as(u32, 5), res7.static);
 
-    std.testing.expectEqualStrings("5", res.with_params.params[0].value);
-    std.testing.expectEqualStrings("bla", res2.with_params.params[0].value);
-    std.testing.expectEqualStrings("bla/bla", res2a.with_params.params[0].value);
-    std.testing.expectEqualStrings("25", res3.with_params.params[0].value);
-    std.testing.expectEqualStrings("20", res3.with_params.params[1].value);
-    std.testing.expectEqualStrings("5", res5.with_params.params[0].value);
-    std.testing.expectEqualStrings("foo", res5.with_params.params[1].value);
+    try std.testing.expectEqualStrings("5", res.with_params.params[0].value);
+    try std.testing.expectEqualStrings("bla", res2.with_params.params[0].value);
+    try std.testing.expectEqualStrings("bla/bla", res2a.with_params.params[0].value);
+    try std.testing.expectEqualStrings("25", res3.with_params.params[0].value);
+    try std.testing.expectEqualStrings("20", res3.with_params.params[1].value);
+    try std.testing.expectEqualStrings("5", res5.with_params.params[0].value);
+    try std.testing.expectEqualStrings("foo", res5.with_params.params[1].value);
 }
 
 test "Insert and retrieve paths with same prefix" {
@@ -208,12 +208,12 @@ test "Insert and retrieve paths with same prefix" {
     const res5 = trie.get("/foo");
     const res6 = trie.get("/api/api/events");
 
-    std.testing.expectEqual(@as(u32, 1), res.static);
-    std.testing.expectEqual(@as(u32, 2), res2.static);
-    std.testing.expectEqual(@as(u32, 3), res3.static);
-    std.testing.expectEqual(@as(u32, 4), res4.with_params.data);
-    std.testing.expect(res5 == .none);
-    std.testing.expect(res6 == .none);
+    try std.testing.expectEqual(@as(u32, 1), res.static);
+    try std.testing.expectEqual(@as(u32, 2), res2.static);
+    try std.testing.expectEqual(@as(u32, 3), res3.static);
+    try std.testing.expectEqual(@as(u32, 4), res4.with_params.data);
+    try std.testing.expect(res5 == .none);
+    try std.testing.expect(res6 == .none);
 
-    std.testing.expectEqualStrings("1337", res4.with_params.params[0].value);
+    try std.testing.expectEqualStrings("1337", res4.with_params.params[0].value);
 }
