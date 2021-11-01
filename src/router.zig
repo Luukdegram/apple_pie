@@ -200,3 +200,7 @@ pub fn trace(comptime path: []const u8, comptime handler: anytype) Route {
 pub fn any(comptime path: []const u8, comptime handler: anytype) Route {
     return handle(.any, path, handler);
 }
+
+test {
+    @import("std").testing.refAllDecls(@This());
+}
