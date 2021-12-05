@@ -14,7 +14,7 @@ const fs = std.fs;
 pub const FileServer = @This();
 
 var dir: fs.Dir = undefined;
-var alloc: *std.mem.Allocator = undefined;
+var alloc: Allocator = undefined;
 var initialized: bool = false;
 var base_path: ?[]const u8 = null;
 
@@ -28,7 +28,7 @@ pub const Config = struct {
 /// function to the `Server`.
 ///
 /// deinit() must be called to close the dir handler
-pub fn init(allocator: *Allocator, config: Config) fs.Dir.OpenError!void {
+pub fn init(allocator: Allocator, config: Config) fs.Dir.OpenError!void {
     dir = try fs.cwd().openDir(config.dir_path, .{});
     alloc = allocator;
     initialized = true;
@@ -85,7 +85,7 @@ fn localRedirect(
     response: *Response,
     request: Request,
     path: []const u8,
-    allocator: *Allocator,
+    allocator: Allocator,
 ) (Response.Error)!void {
     const new_path = try std.mem.concat(allocator, u8, &[_][]const u8{
         path,

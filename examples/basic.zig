@@ -10,7 +10,7 @@ pub fn main() !void {
     var counter: usize = 0;
 
     try http.listenAndServe(
-        &gpa.allocator,
+        gpa.allocator(),
         try std.net.Address.parseIp("0.0.0.0", 8080),
         &counter,
         index,

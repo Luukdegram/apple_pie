@@ -44,7 +44,7 @@ const max_request_size = blk: {
 pub fn listenAndServe(
     /// Memory allocator, for general usage.
     /// Will be used to setup an arena to free any request/response data.
-    gpa: *Allocator,
+    gpa: Allocator,
     /// Address the server is listening at
     address: net.Address,
     /// Allows passing a context that is available to all handler function pointers.
@@ -70,7 +70,7 @@ pub const Server = struct {
         self: *Server,
         /// Memory allocator, for general usage.
         /// Will be used to setup an arena to free any request/response data.
-        gpa: *Allocator,
+        gpa: Allocator,
         /// Address the server is listening at
         address: net.Address,
         /// Runtime context allowing to pass data between handlers.
@@ -147,7 +147,7 @@ fn ClientFn(comptime Context: type, comptime handler: RequestHandler(Context)) t
         /// Same for blocking instances, to ensure multiple clients can connect (synchronously).
         /// NOTE: This is a wrapper function around `handle` so we can catch any errors and handle them accordingly
         /// as we do not want to crash the server when an error occurs.
-        fn run(self: *Self, gpa: *Allocator, clients: *Queue(*Self), context: Context) void {
+        fn run(self: *Self, gpa: Allocator, clients: *Queue(*Self), context: Context) void {
             self.handle(gpa, clients, context) catch |err| {
                 log.err("An error occured handling request: '{s}'", .{@errorName(err)});
                 if (@errorReturnTrace()) |trace| {
@@ -156,7 +156,7 @@ fn ClientFn(comptime Context: type, comptime handler: RequestHandler(Context)) t
             };
         }
 
-        fn handle(self: *Self, gpa: *Allocator, clients: *Queue(*Self), context: Context) !void {
+        fn handle(self: *Self, gpa: Allocator, clients: *Queue(*Self), context: Context) !void {
             defer {
                 self.stream.close();
                 clients.put(&self.node);
@@ -166,13 +166,14 @@ fn ClientFn(comptime Context: type, comptime handler: RequestHandler(Context)) t
                 var arena = std.heap.ArenaAllocator.init(gpa);
                 defer arena.deinit();
 
-                var stack_allocator = std.heap.stackFallback(max_buffer_size, &arena.allocator);
+                var stack_allocator = std.heap.stackFallback(max_buffer_size, arena.allocator());
+                const stack_ally = stack_allocator.get();
 
-                var body = std.ArrayList(u8).init(gpa);
+                var body = std.ArrayList(u8).init(stack_ally);
                 defer body.deinit();
 
                 var response = Response{
-                    .headers = resp.Headers.init(stack_allocator.get()),
+                    .headers = resp.Headers.init(stack_ally),
                     .buffered_writer = std.io.bufferedWriter(self.stream.writer()),
                     .is_flushed = false,
                     .body = body.writer(),

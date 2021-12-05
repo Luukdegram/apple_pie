@@ -7,7 +7,7 @@ pub const io_mode = .evented;
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = &gpa.allocator;
+    const allocator = gpa.allocator();
 
     try file_server.init(allocator, .{ .dir_path = "src", .base_path = "fs" });
     defer file_server.deinit();

@@ -8,7 +8,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     try http.listenAndServe(
-        &gpa.allocator,
+        gpa.allocator(),
         try std.net.Address.parseIp("0.0.0.0", 8080),
         {},
         index,

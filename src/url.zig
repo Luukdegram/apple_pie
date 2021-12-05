@@ -11,7 +11,7 @@ pub const KeyValueMap = struct {
     const MapType = std.StringHashMapUnmanaged([]const u8);
 
     /// Frees all memory owned by this `KeyValueMap`
-    pub fn deinit(self: *KeyValueMap, gpa: *Allocator) void {
+    pub fn deinit(self: *KeyValueMap, gpa: Allocator) void {
         var it = self.map.iterator();
         while (it.next()) |pair| {
             gpa.free(pair.key_ptr.*);
@@ -61,7 +61,7 @@ pub const Url = struct {
     /// Builds query parameters from url's `raw_query`
     /// Memory is owned by caller
     /// Note: For now, each key/value pair needs to be freed manually
-    pub fn queryParameters(self: Url, gpa: *Allocator) QueryError!KeyValueMap {
+    pub fn queryParameters(self: Url, gpa: Allocator) QueryError!KeyValueMap {
         return decodeQueryString(gpa, self.raw_query);
     }
 };
@@ -71,7 +71,7 @@ pub const Url = struct {
 ///
 /// Memory is owned by the caller and as each key and value are allocated due to decoding,
 /// must be freed individually
-pub fn decodeQueryString(gpa: *Allocator, data: []const u8) QueryError!KeyValueMap {
+pub fn decodeQueryString(gpa: Allocator, data: []const u8) QueryError!KeyValueMap {
     var queries = KeyValueMap{ .map = KeyValueMap.MapType{} };
     errdefer queries.deinit(gpa);
 
@@ -108,7 +108,7 @@ pub fn decodeQueryString(gpa: *Allocator, data: []const u8) QueryError!KeyValueM
 
 /// Decodes the given input `value` by decoding the %hex number into ascii
 /// memory is owned by caller
-pub fn decode(allocator: *Allocator, value: []const u8) QueryError![]const u8 {
+pub fn decode(allocator: Allocator, value: []const u8) QueryError![]const u8 {
     var perc_counter: usize = 0;
     var has_plus: bool = false;
 

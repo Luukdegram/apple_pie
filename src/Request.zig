@@ -20,7 +20,7 @@ const max_buffer_size = blk: {
 /// allocator will be freed upon the end of a request. It's therefore illegal behaviour
 /// to read from/write to anything allocated with this after a request and must be duplicated first,
 /// or allocated using a different strategy.
-arena: *Allocator,
+arena: Allocator,
 /// Context provides all information from the actual request that was made by the client.
 context: Context,
 
@@ -175,7 +175,7 @@ pub fn iterator(self: Request) Iterator {
 /// Creates an unmanaged Hashmap from the request headers, memory is owned by caller
 /// Every header key and value will be allocated for the map and must therefore be freed
 /// manually as well.
-pub fn headers(self: Request, gpa: *Allocator) !Headers {
+pub fn headers(self: Request, gpa: Allocator) !Headers {
     var map = Headers{};
 
     var it = self.iterator();
@@ -233,7 +233,7 @@ pub fn formIterator(self: Request) FormIterator {
 ///
 /// NOTE2: If retrieving multiple fields, use `formIterator()` or `form()`
 /// as each call to `formValue` will iterate over all fields.
-pub fn formValue(self: Request, gpa: *Allocator, key: []const u8) !?[]const u8 {
+pub fn formValue(self: Request, gpa: Allocator, key: []const u8) !?[]const u8 {
     var it = self.formIterator();
     return while (try it.next(gpa)) |field| {
         defer gpa.free(field.key);
@@ -244,7 +244,7 @@ pub fn formValue(self: Request, gpa: *Allocator, key: []const u8) !?[]const u8 {
 
 /// Constructs a map of key-value pairs for each form field.
 /// User is responsible for managing its memory.
-pub fn form(self: Request, gpa: *Allocator) !url.KeyValueMap {
+pub fn form(self: Request, gpa: Allocator) !url.KeyValueMap {
     var map = url.KeyValueMap{ .map = .{} };
     errdefer map.deinit(gpa);
     var it = self.formIterator();
@@ -269,7 +269,7 @@ const FormIterator = struct {
         value: []const u8,
 
         /// Frees the memory allocated for the `Field`
-        pub fn deinit(self: Field, gpa: *Allocator) void {
+        pub fn deinit(self: Field, gpa: Allocator) void {
             gpa.free(self.key);
             gpa.free(self.value);
         }
@@ -277,7 +277,7 @@ const FormIterator = struct {
 
     /// Finds the next form field. Will return `null` when it reached
     /// the end of the form.
-    pub fn next(self: *FormIterator, gpa: *Allocator) !?Field {
+    pub fn next(self: *FormIterator, gpa: Allocator) !?Field {
         if (self.index >= self.form_data.len) return null;
 
         switch (self.form_type) {
@@ -386,7 +386,7 @@ pub const ParseError = error{
 /// The Allocator is made available to users that require an allocation for during a single request,
 /// as an arena is passed in by the `Server`. The provided buffer is used to parse the actual content,
 /// meaning the entire request -> response can be done with no allocations.
-pub fn parse(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || Stream.ReadError)!Request {
+pub fn parse(gpa: Allocator, reader: anytype, buffer: []u8) (ParseError || Stream.ReadError)!Request {
     return Request{
         .arena = gpa,
         .context = try parseContext(
@@ -397,7 +397,7 @@ pub fn parse(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || Stre
     };
 }
 
-fn parseContext(gpa: *Allocator, reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Error)!Context {
+fn parseContext(gpa: Allocator, reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Error)!Context {
     var ctx: Context = .{
         .method = .get,
         .url = Url{
@@ -466,7 +466,7 @@ fn Parser(ReaderType: anytype) type {
     return struct {
         const Self = @This();
 
-        gpa: *Allocator,
+        gpa: Allocator,
         buffer: []u8,
         index: usize,
         state: std.meta.Tag(Event),
@@ -494,7 +494,7 @@ fn Parser(ReaderType: anytype) type {
 
         const Error = ParseError || ReaderType.Error;
 
-        fn init(gpa: *Allocator, buffer: []u8, reader: ReaderType) Self {
+        fn init(gpa: Allocator, buffer: []u8, reader: ReaderType) Self {
             return .{
                 .gpa = gpa,
                 .buffer = buffer,

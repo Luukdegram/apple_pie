@@ -12,7 +12,7 @@ const Context = struct {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = &gpa.allocator;
+    const allocator = gpa.allocator();
 
     try fs.init(allocator, .{ .dir_path = "src", .base_path = "files" });
     defer fs.deinit();
