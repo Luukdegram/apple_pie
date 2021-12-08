@@ -38,7 +38,7 @@ pub fn main() !void {
     const my_context: Context = .{ .data = "Hello, world!" };
 	
     try http.listenAndServe(
-        &gpa.allocator,
+        gpa.allocator(),
         try std.net.Address.parseIp("127.0.0.1", 8080),
         my_context,
         index,
