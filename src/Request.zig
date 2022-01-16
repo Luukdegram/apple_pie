@@ -435,7 +435,9 @@ fn parseContext(gpa: Allocator, reader: anytype, buffer: []u8) (ParseError || @T
                 if (ctx.form_type == .none and
                     std.ascii.eqlIgnoreCase(header.key, "content-type"))
                 {
-                    if (std.ascii.indexOfIgnoreCase(header.value, "multipart/form-data")) |_| {
+                    const until_first_semicolon = std.mem.sliceTo(header.value, ';');
+                    const trimmed_value = std.mem.trim(u8, until_first_semicolon, " ");
+                    if (std.ascii.indexOfIgnoreCase(trimmed_value, "multipart/form-data")) |_| {
                         const semicolon = "multipart/form-data".len;
                         if (header.value[semicolon] != ';') return error.InvalidBody;
 
@@ -447,7 +449,7 @@ fn parseContext(gpa: Allocator, reader: anytype, buffer: []u8) (ParseError || @T
                             if (end - start > 70) return error.IncorrectHeader; // Boundary may be at max 70 characters
                             ctx.form_type = .{ .multipart = buffer[start..end] };
                         } else return error.InvalidBody;
-                    } else if (std.ascii.eqlIgnoreCase(header.value, "application/x-www-form-urlencoded")) {
+                    } else if (std.ascii.eqlIgnoreCase(trimmed_value, "application/x-www-form-urlencoded")) {
                         ctx.form_type = .url_encoded;
                     }
                 }
