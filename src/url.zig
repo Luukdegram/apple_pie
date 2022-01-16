@@ -131,30 +131,30 @@ pub fn decode(allocator: Allocator, value: []const u8) QueryError![]const u8 {
     }
 
     // replace url encoded string
-    const buffer = try allocator.alloc(u8, value.len - 2 * perc_counter);
-    errdefer allocator.free(buffer);
+    var buffer = try std.ArrayList(u8).initCapacity(allocator, value.len - 2 * perc_counter);
+    defer buffer.deinit();
 
     // No decoding required, so copy into allocated buffer so the result
     // can be freed consistantly.
     if (perc_counter == 0 and !has_plus) {
-        std.mem.copy(u8, buffer, value);
-        return buffer;
+        buffer.appendSliceAssumeCapacity(value);
+        return buffer.toOwnedSlice();
     }
 
     i = 0;
-    while (i < buffer.len) : (i += 1) {
+    while (i < value.len) : (i += 1) {
         switch (value[i]) {
             '%' => {
                 const a = try std.fmt.charToDigit(value[i + 1], 16);
                 const b = try std.fmt.charToDigit(value[i + 2], 16);
-                buffer[i] = a << 4 | b;
+                buffer.appendAssumeCapacity(a << 4 | b);
                 i += 2;
             },
-            '+' => buffer[i] = ' ',
-            else => buffer[i] = value[i],
+            '+' => buffer.appendAssumeCapacity(' '),
+            else => buffer.appendAssumeCapacity(value[i]),
         }
     }
-    return buffer;
+    return buffer.toOwnedSlice();
 }
 
 /// Sanitizes the given `path` by removing '..' etc.
@@ -345,4 +345,12 @@ test "Sanitize paths" {
         var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
         try testing.expectEqualStrings(case.expected, sanitize(case.input, &buf));
     }
+}
+
+test "decode url encoded data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    try std.testing.expectEqualStrings("hello, world", try decode(arena.allocator(), "hello%2C+world"));
+    try std.testing.expectEqualStrings("contact@example.com", try decode(arena.allocator(), "contact%40example.com"));
 }
