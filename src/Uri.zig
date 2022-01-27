@@ -87,14 +87,14 @@ pub fn parse(buffer: []const u8) ParseError!Uri {
 
     var position: usize = 0;
     if (buffer[0] == '/') {
-        // try parsePath(&uri, buffer);
+        try parsePath(&uri, buffer, true);
     } else {
         try parseSchema(&uri, buffer);
         const valid_schema = try consumePart("://", buffer[uri.scheme.?.len..]);
         position = try parseAuthority(&uri, valid_schema);
-        if (position == buffer.len) return uri;
-        if (buffer[position] == '/') {
-            // try parsePath(&uri, buffer[position..]);
+        if (position == valid_schema.len) return uri;
+        if (valid_schema[position] == '/') {
+            try parsePath(&uri, valid_schema[position..], false);
         } else uri.path = "";
     }
     position += uri.path.len;
@@ -195,6 +195,32 @@ fn parseIpv6(uri: *Uri, buffer: []const u8) !void {
         } else buffer.len - (colon_pos + 1);
         uri.port = std.fmt.parseInt(u16, buffer[colon_pos + 1 ..][0..end_port], 10) catch return error.InvalidPort;
     }
+}
+
+/// Parses the path
+/// When `is_no_scheme` is true, it will ensure the first segment is non-zero without any colon
+fn parsePath(uri: *Uri, buffer: []const u8, is_no_scheme: bool) ParseError!void {
+    if (is_no_scheme) {
+        if (buffer.len == 0) return error.InvalidCharacter;
+        if (buffer.len == 1) {
+            if (buffer[0] != '/') return error.InvalidCharacter;
+            uri.path = "/";
+            return;
+        }
+        if (buffer[1] == ':') return error.InvalidCharacter;
+    }
+
+    for (buffer) |char, index| {
+        if (char == '?' or char == '#') {
+            uri.path = buffer[0..index];
+            return;
+        }
+        if (!isPChar(char) and char != '/') {
+            return error.InvalidCharacter;
+        }
+    }
+    uri.path = buffer;
+    return;
 }
 
 fn consumePart(part: []const u8, buffer: []const u8) error{InvalidCharacter}![]const u8 {
@@ -339,5 +365,17 @@ test "Userinfo" {
 
     inline for (error_cases) |case| {
         try std.testing.expectError(ParseError.InvalidCharacter, parse(case));
+    }
+}
+
+test "Path" {
+    const cases = .{
+        .{ "gemini://example.com:100/hello", "/hello" },
+        .{ "gemini://example.com/hello/world", "/hello/world" },
+        .{ "gemini://example.com/../hello", "/../hello" },
+    };
+    inline for (cases) |case| {
+        const uri = try parse(case[0]);
+        try std.testing.expectEqualStrings(case[1], uri.path);
     }
 }
