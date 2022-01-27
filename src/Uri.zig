@@ -137,11 +137,12 @@ fn parseAuthority(uri: *Uri, buffer: []const u8) ParseError!usize {
         // verify userinfo characters
         var colon_index: usize = 0;
         for (user_info) |char, index| {
-            if (!isRegName(char)) return error.InvalidCharacter;
             if (char == ':') {
                 uri.username = user_info[0..index];
                 colon_index = index;
+                continue;
             }
+            if (!isRegName(char)) return error.InvalidCharacter;
         }
         if (colon_index != 0 and colon_index < user_info.len - 1) {
             uri.password = user_info[colon_index..][1..];
@@ -151,11 +152,10 @@ fn parseAuthority(uri: *Uri, buffer: []const u8) ParseError!usize {
 
         break :blk authority[user_index..][1..];
     } else authority;
-
     if (remaining.len == 0) return error.MissingHost;
     switch (remaining[0]) {
-        '[' => try parseIpv6(uri, remaining[1..end]),
-        else => try parseHost(uri, remaining[0..end]),
+        '[' => try parseIpv6(uri, remaining[1..]),
+        else => try parseHost(uri, remaining[0..]),
     }
 
     return end;
@@ -211,7 +211,7 @@ fn isRegName(char: u8) bool {
 /// Checks if unreserved character
 /// ALPHA / DIGIT/ [ "-" / "." / "_" / "~" ]
 fn isUnreserved(char: u8) bool {
-    return std.ascii.isAlpha(char) or std.ascii.isDigit(char) or switch (char) {
+    return std.ascii.isAlNum(char) or switch (char) {
         '-', '.', '_', '~' => true,
         else => false,
     };
@@ -310,6 +310,31 @@ test "Host" {
         "gemini://exa\"",
         "git://sub.example.[om",
         "https://[::ffff:192.$168.100.228]",
+    };
+
+    inline for (error_cases) |case| {
+        try std.testing.expectError(ParseError.InvalidCharacter, parse(case));
+    }
+}
+
+test "Userinfo" {
+    const cases = .{
+        .{ "https://user:password@host.com", "user", "password", "host.com" },
+        .{ "https://user@host.com", "user", "", "host.com" },
+    };
+
+    inline for (cases) |case| {
+        const uri = try parse(case[0]);
+        try std.testing.expectEqualStrings(case[1], uri.username.?);
+        if (uri.password) |password| {
+            try std.testing.expectEqualStrings(case[2], password);
+        } else try std.testing.expectEqualStrings(case[2], "");
+        try std.testing.expectEqualStrings(case[3], uri.host.?);
+    }
+
+    const error_cases = .{
+        "https://us|er@host.com",
+        "https://user@password@host.com",
     };
 
     inline for (error_cases) |case| {
