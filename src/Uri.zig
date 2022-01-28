@@ -81,6 +81,8 @@ pub const ParseError = error{
     InvalidCharacter,
 };
 
+/// Parses the given payload into URI components.
+/// All components will be validated against invalid characters
 pub fn parse(buffer: []const u8) ParseError!Uri {
     var uri = Uri.empty;
     if (buffer.len == 0) return uri;
@@ -90,15 +92,24 @@ pub fn parse(buffer: []const u8) ParseError!Uri {
         try parsePath(&uri, buffer, true);
     } else {
         try parseSchema(&uri, buffer);
-        const valid_schema = try consumePart("://", buffer[uri.scheme.?.len..]);
-        position = try parseAuthority(&uri, valid_schema);
-        if (position == valid_schema.len) return uri;
-        if (valid_schema[position] == '/') {
-            try parsePath(&uri, valid_schema[position..], false);
+        position += uri.scheme.?.len;
+        try consumePart("://", buffer[position..]);
+        position += 3;
+        position += try parseAuthority(&uri, buffer[position..]);
+        if (position == buffer.len) return uri;
+        if (buffer[position] == '/') {
+            try parsePath(&uri, buffer[position..], false);
         } else uri.path = "";
     }
     position += uri.path.len;
     if (position == buffer.len) return uri;
+    if (buffer[position] == '?') {
+        try parseQuery(&uri, buffer[position..]);
+        position += uri.query.?.len + 1;
+    }
+    if (position == buffer.len) return uri;
+    std.debug.assert(buffer[position] == '#');
+    try parseFragment(&uri, buffer[position..]);
 
     return uri;
 }
@@ -220,12 +231,38 @@ fn parsePath(uri: *Uri, buffer: []const u8, is_no_scheme: bool) ParseError!void 
         }
     }
     uri.path = buffer;
-    return;
 }
 
-fn consumePart(part: []const u8, buffer: []const u8) error{InvalidCharacter}![]const u8 {
+/// Parses the query component of an URI
+fn parseQuery(uri: *Uri, buffer: []const u8) ParseError!void {
+    std.debug.assert(buffer.len > 0);
+    std.debug.assert(buffer[0] == '?');
+    for (buffer[1..]) |char, index| {
+        if (char == '#') {
+            uri.query = buffer[0..index];
+            return;
+        }
+        if (!isPChar(char) and char != '/' and char != '?') {
+            return error.InvalidCharacter;
+        }
+    }
+    uri.query = buffer[1..];
+}
+
+/// Parses the fragment component of an URI
+fn parseFragment(uri: *Uri, buffer: []const u8) ParseError!void {
+    std.debug.assert(buffer.len > 0);
+    std.debug.assert(buffer[0] == '#');
+    for (buffer[1..]) |char| {
+        if (!isPChar(char) and char != '/' and char != '?') {
+            return error.InvalidCharacter;
+        }
+    }
+    uri.fragment = buffer[1..];
+}
+
+fn consumePart(part: []const u8, buffer: []const u8) error{InvalidCharacter}!void {
     if (!std.mem.startsWith(u8, buffer, part)) return error.InvalidCharacter;
-    return buffer[part.len..];
 }
 
 /// Returns true when Reg-name
@@ -377,5 +414,30 @@ test "Path" {
     inline for (cases) |case| {
         const uri = try parse(case[0]);
         try std.testing.expectEqualStrings(case[1], uri.path);
+    }
+}
+
+test "Query" {
+    const cases = .{
+        .{ "gemini://example.com:100/hello?", "" },
+        .{ "gemini://example.com/?cool=true", "cool=true" },
+        .{ "gemini://example.com?hello=world", "hello=world" },
+    };
+
+    inline for (cases) |case| {
+        const uri = try parse(case[0]);
+        try std.testing.expectEqualStrings(case[1], uri.query.?);
+    }
+}
+
+test "Fragment" {
+    const cases = .{
+        .{ "gemini://example.com:100/hello?#hi", "hi" },
+        .{ "gemini://example.com/#hello", "hello" },
+        .{ "gemini://example.com#hello-world", "hello-world" },
+    };
+    inline for (cases) |case| {
+        const uri = try parse(case[0]);
+        try std.testing.expectEqualStrings(case[1], uri.fragment.?);
     }
 }
