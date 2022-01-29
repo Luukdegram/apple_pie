@@ -7,7 +7,7 @@ const std = @import("std");
 const Request = @import("Request.zig");
 const Response = @import("response.zig").Response;
 const MimeType = @import("mime_type.zig").MimeType;
-const url = @import("url.zig");
+const Uri = @import("Uri.zig");
 const Allocator = std.mem.Allocator;
 const fs = std.fs;
 
@@ -50,7 +50,7 @@ pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
     std.debug.assert(initialized);
     const index = "index.html";
     var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    var path = url.sanitize(request.path(), &buffer);
+    var path = Uri.resolvePath(request.path(), &buffer);
 
     if (std.mem.endsWith(u8, path, index)) {
         return localRedirect(response, request, "./", alloc);

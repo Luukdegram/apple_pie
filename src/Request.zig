@@ -5,8 +5,7 @@ const Request = @This();
 
 const root = @import("root");
 const std = @import("std");
-const url = @import("url.zig");
-const Url = url.Url;
+const Uri = @import("Uri.zig");
 const Allocator = std.mem.Allocator;
 const mem = std.mem;
 const Stream = std.net.Stream;
@@ -96,8 +95,10 @@ pub const Reader = std.io.BufferedReader(4096, Stream.Reader).Reader;
 pub const Context = struct {
     /// GET, POST, PUT, DELETE or PATCH
     method: Method,
-    /// Url object, get be used to retrieve path or query parameters
-    url: Url,
+    /// URI object, contains the parsed and validated path and optional
+    /// query and fragment.
+    /// Note: For http 1.1 this may also contain the authority component.
+    uri: Uri,
     /// HTTP Request headers data.
     raw_header_data: []const u8,
     /// Protocol used by the requester, http1.1, http2.0, etc.
@@ -200,7 +201,7 @@ pub fn body(self: Request) []const u8 {
 /// Returns the path of the request
 /// To retrieve the raw path, access `context.url.raw_path`
 pub fn path(self: Request) []const u8 {
-    return self.context.url.path;
+    return self.context.uri.path;
 }
 
 /// Returns the method of the request as `Method`
@@ -244,8 +245,8 @@ pub fn formValue(self: Request, gpa: Allocator, key: []const u8) !?[]const u8 {
 
 /// Constructs a map of key-value pairs for each form field.
 /// User is responsible for managing its memory.
-pub fn form(self: Request, gpa: Allocator) !url.KeyValueMap {
-    var map = url.KeyValueMap{ .map = .{} };
+pub fn form(self: Request, gpa: Allocator) !Uri.KeyValueMap {
+    var map = Uri.KeyValueMap{ .map = .{} };
     errdefer map.deinit(gpa);
     var it = self.formIterator();
     while (try it.next(gpa)) |field| {
@@ -336,11 +337,11 @@ const FormIterator = struct {
                     key = key[0..index];
                 } else return error.InvalidBody;
 
-                const unencoded_key = try url.decode(gpa, key);
+                const unencoded_key = try Uri.decode(gpa, key);
                 errdefer gpa.free(unencoded_key);
                 return Field{
                     .key = unencoded_key,
-                    .value = try url.decode(gpa, value),
+                    .value = try Uri.decode(gpa, value),
                 };
             },
         }
@@ -400,11 +401,7 @@ pub fn parse(gpa: Allocator, reader: anytype, buffer: []u8) (ParseError || Strea
 fn parseContext(gpa: Allocator, reader: anytype, buffer: []u8) (ParseError || @TypeOf(reader).Error)!Context {
     var ctx: Context = .{
         .method = .get,
-        .url = Url{
-            .path = "/",
-            .raw_path = "/",
-            .raw_query = "",
-        },
+        .uri = Uri.empty,
         .raw_header_data = undefined,
         .protocol = .http_1_1,
         .host = null,
@@ -418,7 +415,7 @@ fn parseContext(gpa: Allocator, reader: anytype, buffer: []u8) (ParseError || @T
             .status => |status| {
                 ctx.protocol = Request.Protocol.fromString(status.protocol);
                 ctx.connection_type = if (ctx.protocol == .http_1_0) .close else .keep_alive;
-                ctx.url = Url.init(status.path);
+                ctx.uri = Uri.parse(status.path) catch return error.InvalidUrl;
                 ctx.method = Request.Method.fromString(status.method);
             },
             .header => |header| {
@@ -429,8 +426,10 @@ fn parseContext(gpa: Allocator, reader: anytype, buffer: []u8) (ParseError || @T
                     if (std.ascii.eqlIgnoreCase(header.value, "close")) ctx.connection_type = .close;
                 }
 
-                if (ctx.host == null and std.ascii.eqlIgnoreCase(header.key, "host"))
+                if (ctx.host == null and std.ascii.eqlIgnoreCase(header.key, "host")) {
                     ctx.host = header.value;
+                    _ = Uri.parseAuthority(&ctx.uri, header.value) catch return error.IncorrectHeader;
+                }
 
                 if (ctx.form_type == .none and
                     std.ascii.eqlIgnoreCase(header.key, "content-type"))
