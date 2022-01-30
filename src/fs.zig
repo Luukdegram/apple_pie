@@ -89,7 +89,7 @@ fn localRedirect(
 ) (Response.Error)!void {
     const new_path = try std.mem.concat(allocator, u8, &[_][]const u8{
         path,
-        request.context.url.raw_query,
+        request.context.uri.raw_query,
     });
     defer allocator.free(new_path);
 
