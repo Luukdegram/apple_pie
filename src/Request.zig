@@ -199,7 +199,7 @@ pub fn body(self: Request) []const u8 {
 }
 
 /// Returns the path of the request
-/// To retrieve the raw path, access `context.url.raw_path`
+/// To retrieve the raw path, access `context.uri.raw_path`
 pub fn path(self: Request) []const u8 {
     return self.context.uri.path;
 }
