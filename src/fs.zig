@@ -87,11 +87,12 @@ fn localRedirect(
     path: []const u8,
     allocator: Allocator,
 ) (Response.Error)!void {
-    const new_path = try std.mem.concat(allocator, u8, &[_][]const u8{
-        path,
-        request.context.uri.raw_query,
-    });
-    defer allocator.free(new_path);
+    const new_path = if (request.context.uri.query) |query| blk: {
+        break :blk try std.mem.concat(allocator, u8, &.{ path, query });
+    } else path;
+    defer if (request.context.uri.query != null) {
+        allocator.free(new_path);
+    };
 
     try response.headers.put("Location", new_path);
     try response.writeHeader(.moved_permanently);
