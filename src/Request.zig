@@ -41,20 +41,24 @@ pub const Method = enum {
     any,
 
     fn fromString(string: []const u8) Method {
-        return switch (string[0]) {
-            'G' => .get,
-            'H' => .head,
-            'P' => @as(Method, switch (string[1]) {
-                'O' => .post,
-                'U' => .put,
-                else => .patch,
-            }),
-            'D' => .delete,
-            'C' => .connect,
-            'O' => .options,
-            'T' => .trace,
-            else => .any,
-        };
+        return if (std.mem.eql(u8, string, "GET"))
+            .get
+        else if (std.mem.eql(u8, string, "POST"))
+            .post
+        else if (std.mem.eql(u8, string, "PUT"))
+            .put
+        else if (std.mem.eql(u8, string, "DELETE"))
+            .delete
+        else if (std.mem.eql(u8, string, "HEAD"))
+            .head
+        else if (std.mem.eql(u8, string, "PATCH"))
+            .patch
+        else if (std.mem.eql(u8, string, "OPTIONS"))
+            .options
+        else if (std.mem.eql(u8, string, "TRACE"))
+            @as(Method, .trace)
+        else
+            .any;
     }
 };
 

@@ -11,19 +11,26 @@ const Request = @import("Request.zig");
 const Response = @import("response.zig").Response;
 const RequestHandler = @import("server.zig").RequestHandler;
 
-/// Contains a path and a handler function that
-pub const Route = struct {
-    /// Path by which the route is triggered
-    path: []const u8,
-    /// The handler function that will be called when triggered
-    handler: anytype,
-    /// http method
-    method: Request.Method,
-};
+/// Route defines the path, method and how to parse such path
+/// into a type that the handler can accept.
+pub fn Route(comptime Context: type) type {
+    return struct {
+        /// Path by which the route is triggered
+        path: []const u8,
+        /// The type the path captures will be transformed into
+        /// This type will be passed as an '*const anyopaque' as the final argument
+        /// to the route handler.
+        capture_type: ?type = null,
+        /// The handler function that will be called when triggered
+        handler: fn handle(Context, *Response, Request, ?*const anyopaque) anyerror!void,
+        /// http method
+        method: Request.Method,
+    };
+}
 
 /// Generic function that inserts each route's path into a radix tree
 /// to retrieve the right route when a request has been made
-pub fn Router(comptime Context: type, comptime routes: []const Route) RequestHandler(Context) {
+pub fn Router(comptime Context: type, comptime routes: []const Route(Context)) RequestHandler(Context) {
     comptime var trees: [10]trie.Trie(u8) = undefined;
     inline for (trees) |*t| t.* = trie.Trie(u8){};
 
@@ -51,12 +58,9 @@ pub fn Router(comptime Context: type, comptime routes: []const Route) RequestHan
     return struct {
         const Self = @This();
 
-        fn handle(comptime route: Route, params: []const trie.Entry, ctx: Context, res: *Response, req: Request) !void {
-            const Fn = @typeInfo(@TypeOf(route.handler)).Fn;
-            const args = Fn.args;
-            if (args.len == 3) return route.handler(ctx, res, req);
-
-            const ArgType = args[3].arg_type orelse return route.handler(res, req, {});
+        fn handle(comptime route: Route(Context), params: []const trie.Entry, ctx: Context, res: *Response, req: Request) !void {
+            if (route.capture_type == null) return route.handler(ctx, res, req, null);
+            const ArgType = route.capture_type.?;
 
             const param: ArgType = switch (ArgType) {
                 []const u8 => if (params.len > 0) params[0].value else &[_]u8{},
@@ -93,10 +97,10 @@ pub fn Router(comptime Context: type, comptime routes: []const Route) RequestHan
                     else => @compileError("Unsupported type " ++ @typeName(ArgType)),
                 },
             };
-            return route.handler(ctx, res, req, param);
+            return route.handler(ctx, res, req, @ptrCast(?*const anyopaque, &param));
         }
 
-        fn serve(context: Context, response: *Response, request: Request) !void {
+        pub fn serve(context: Context, response: *Response, request: Request) !void {
             switch (trees[@enumToInt(request.method())].get(request.path())) {
                 .none => {
                     // if nothing was found for current method, try the wildcard
@@ -130,77 +134,76 @@ pub fn Router(comptime Context: type, comptime routes: []const Route) RequestHan
     }.serve;
 }
 
-/// Creates a new `Route` for the given HTTP Method that will be
-/// triggered based on its path conditions
-/// the `handler` function must have atleast 2 arguments where
-/// @TypeOf(arg[0]) == *Response
-/// @TypeOf(arg[1]) == Request
-///
-/// It's allowed to provide a 3rd argument if path contains parameters such as ':<name>'
-/// The caught parameters will be parsed into the type of the argument
-pub fn handle(
-    comptime method: Request.Method,
-    comptime path: []const u8,
-    comptime handler: anytype,
-) Route {
-    return Route{
-        .path = path,
-        .handler = handler,
-        .method = method,
+/// Creates a builder namespace, generic over the given `Context`
+/// This makes it easy to create the routers without having to passing
+/// a lot of the types.
+pub fn Builder(comptime Context: type) type {
+    return struct {
+        /// The generic handler type that all routes must match
+        pub const HandlerType = fn (Context, *Response, Request, ?*const anyopaque) anyerror!void;
+
+        /// Creates a new `Route` for the given HTTP Method that will be
+        /// triggered based on its path conditions
+        ///
+        /// When the path contains parameters such as ':<name>' it will be captured
+        /// and parsed into the type given as `capture_type`.
+        pub fn basicRoute(
+            comptime method: Request.Method,
+            comptime path: []const u8,
+            comptime CaptureType: ?type,
+            comptime handler: HandlerType,
+        ) Route(Context) {
+            return .{
+                .method = method,
+                .path = path,
+                .capture_type = CaptureType,
+                .handler = handler,
+            };
+        }
+
+        /// Shorthand function to create a `Route` where method is 'GET'
+        pub fn get(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
+            return basicRoute(.get, path, CaptureType, handler);
+        }
+        /// Shorthand function to create a `Route` where method is 'POST'
+        pub fn post(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
+            return basicRoute(.post, path, CaptureType, handler);
+        }
+        /// Shorthand function to create a `Route` where method is 'PATCH'
+        pub fn patch(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
+            return basicRoute(.patch, path, CaptureType, handler);
+        }
+        /// Shorthand function to create a `Route` where method is 'PUT'
+        pub fn put(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
+            return basicRoute(.put, path, CaptureType, handler);
+        }
+        /// Shorthand function to create a `Route` which matches with any method
+        pub fn any(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
+            return basicRoute(.any, path, CaptureType, handler);
+        }
+        /// Shorthand function to create a `Route` where method is 'HEAD'
+        pub fn head(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
+            return basicRoute(.head, path, CaptureType, handler);
+        }
+        /// Shorthand function to create a `Route` where method is 'DELETE'
+        pub fn delete(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
+            return basicRoute(.delete, path, CaptureType, handler);
+        }
+        /// Shorthand function to create a `Route` where method is 'CONNECT'
+        pub fn connect(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
+            return basicRoute(.connect, path, CaptureType, handler);
+        }
+        /// Shorthand function to create a `Route` where method is 'OPTIONS'
+        pub fn options(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
+            return basicRoute(.options, path, CaptureType, handler);
+        }
+        /// Shorthand function to create a `Route` where method is 'TRACE'
+        pub fn trace(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
+            return basicRoute(.trace, path, CaptureType, handler);
+        }
     };
 }
 
-/// Shorthand function to create a `Route` where method is 'GET'
-pub fn get(comptime path: []const u8, comptime handler: anytype) Route {
-    return handle(.get, path, handler);
-}
-
-/// Shorthand function to create a `Route` where method is 'POST'
-pub fn post(comptime path: []const u8, comptime handler: anytype) Route {
-    return handle(.post, path, handler);
-}
-
-/// Shorthand function to create a `Route` where method is 'PATCH'
-pub fn patch(comptime path: []const u8, comptime handler: anytype) Route {
-    return handle(.patch, path, handler);
-}
-
-/// Shorthand function to create a `Route` where method is 'PUT'
-pub fn put(comptime path: []const u8, comptime handler: anytype) Route {
-    return handle(.put, path, handler);
-}
-
-/// Shorthand function to create a `Route` where method is 'HEAD'
-pub fn head(comptime path: []const u8, comptime handler: anytype) Route {
-    return handle(.head, path, handler);
-}
-
-/// Shorthand function to create a `Route` where method is 'DELETE'
-pub fn delete(comptime path: []const u8, comptime handler: anytype) Route {
-    return handle(.delete, path, handler);
-}
-
-/// Shorthand function to create a `Route` where method is 'CONNECT'
-pub fn connect(comptime path: []const u8, comptime handler: anytype) Route {
-    return handle(.connect, path, handler);
-}
-
-/// Shorthand function to create a `Route` where method is 'OPTIONS'
-pub fn options(comptime path: []const u8, comptime handler: anytype) Route {
-    return handle(.options, path, handler);
-}
-
-/// Shorthand function to create a `Route` where method is 'TRACE'
-pub fn trace(comptime path: []const u8, comptime handler: anytype) Route {
-    return handle(.trace, path, handler);
-}
-
-/// Shorthand function to create a `Route` which will be matched to any
-/// request method. It is still recommended to use the other specific methods
-pub fn any(comptime path: []const u8, comptime handler: anytype) Route {
-    return handle(.any, path, handler);
-}
-
 test {
-    @import("std").testing.refAllDecls(@This());
+    std.testing.refAllDecls(@This());
 }
