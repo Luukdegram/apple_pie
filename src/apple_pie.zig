@@ -1,5 +1,7 @@
 pub const Request = @import("Request.zig");
-pub const Response = @import("response.zig").Response;
+const resp = @import("response.zig");
+pub const Response = resp.Response;
+pub const Headers = resp.Headers;
 pub const FileServer = @import("fs.zig").FileServer;
 pub const MimeType = @import("mime_type.zig");
 pub const router = @import("router.zig");
