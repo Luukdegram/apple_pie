@@ -24,27 +24,25 @@ pub fn main() !void {
         try std.net.Address.parseIp("127.0.0.1", 8080),
         &context,
         comptime router.Router(*Context, &.{
-            .{ .method = .get, .path = "/", .handler = index },
-            .{ .method = .get, .path = "/headers", .handler = headers },
-            .{ .method = .get, .path = "/files/*", .handler = serveFs },
-            .{ .method = .get, .path = "/hello/:name", .handler = hello },
-            .{ .method = .get, .path = "/route", .handler = route },
-            .{ .method = .get, .path = "/posts/:post/messages/:message", .handler = messages },
+            .{ .method = .get, .path = "/", .handler = router.wrap(*Context, index) },
+            .{ .method = .get, .path = "/headers", .handler = router.wrap(*Context, headers) },
+            .{ .method = .get, .path = "/files/*", .handler = router.wrap(*Context, serveFs) },
+            .{ .method = .get, .path = "/hello/:name", .handler = router.wrap(*Context, hello) },
+            .{ .method = .get, .path = "/route", .handler = router.wrap(*Context, route) },
+            .{ .method = .get, .path = "/posts/:post/messages/:message", .handler = router.wrap(*Context, messages) },
         }),
     );
 }
 
 /// Very basic text-based response, it's up to implementation to set
 /// the correct content type of the message
-fn index(ctx: *Context, response: *http.Response, request: http.Request, captures: []const router.Entry) !void {
-    std.debug.assert(captures.len == 0);
+fn index(ctx: *Context, response: *http.Response, request: http.Request) !void {
     _ = request;
     ctx.last_route = "Index";
     try response.writer().writeAll("Hello Zig!\n");
 }
 
-fn route(ctx: *Context, resp: *http.Response, request: http.Request, captures: []const router.Entry) !void {
-    std.debug.assert(captures.len == 0);
+fn route(ctx: *Context, resp: *http.Response, request: http.Request) !void {
     _ = request;
     defer ctx.last_route = null;
 
@@ -55,8 +53,7 @@ fn route(ctx: *Context, resp: *http.Response, request: http.Request, captures: [
     }
 }
 
-fn headers(ctx: *Context, response: *http.Response, request: http.Request, captures: []const router.Entry) !void {
-    std.debug.assert(captures.len == 0);
+fn headers(ctx: *Context, response: *http.Response, request: http.Request) !void {
     _ = ctx;
     try response.writer().print("Path: {s}\n", .{request.path()});
     var it = request.iterator();
@@ -66,43 +63,21 @@ fn headers(ctx: *Context, response: *http.Response, request: http.Request, captu
 }
 
 /// Shows "Hello {name}" where {name} is /hello/:name
-fn hello(ctx: *Context, resp: *http.Response, req: http.Request, captures: []const router.Entry) !void {
+fn hello(ctx: *Context, resp: *http.Response, req: http.Request, name: []const u8) !void {
     _ = req;
     _ = ctx;
-    var name: ?[]const u8 = null;
-    for (captures) |capture| {
-        if (std.mem.eql(u8, capture.key, "name")) {
-            name = capture.value;
-        }
-    }
-    std.debug.assert(name != null);
-    try resp.writer().print("Hello {s}\n", .{name.?});
+    try resp.writer().print("Hello {s}\n", .{name});
 }
 
 /// Serves a file
-fn serveFs(ctx: *Context, resp: *http.Response, req: http.Request, captures: []const router.Entry) !void {
-    std.debug.assert(captures.len == 0);
+fn serveFs(ctx: *Context, resp: *http.Response, req: http.Request) !void {
     _ = ctx;
     try fs.serve({}, resp, req);
 }
 
 /// Shows the post number and message text
-fn messages(ctx: *Context, resp: *http.Response, req: http.Request, captures: []const router.Entry) !void {
+fn messages(ctx: *Context, resp: *http.Response, req: http.Request, post: usize, message: []const u8) !void {
     _ = ctx;
     _ = req;
-    var post: ?usize = null;
-    var message: ?[]const u8 = null;
-
-    for (captures) |capture| {
-        if (std.mem.eql(u8, capture.key, "post")) {
-            post = try std.fmt.parseInt(usize, capture.value, 10);
-        } else if (std.mem.eql(u8, capture.key, "message")) {
-            message = capture.value;
-        } else unreachable;
-    }
-
-    try resp.writer().print("Post {d}, message: '{s}'\n", .{
-        post.?,
-        message.?,
-    });
+    try resp.writer().print("Post {d}, message: '{s}'\n", .{ post, message });
 }

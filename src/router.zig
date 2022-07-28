@@ -20,9 +20,11 @@ pub fn Route(comptime Context: type) type {
         /// Path by which the route is triggered
         path: []const u8,
         /// The handler function that will be called when triggered
-        handler: fn handle(Context, *Response, Request, params: []const Entry) anyerror!void,
+        handler: Handler,
         /// http method
         method: Request.Method,
+
+        const Handler = fn handle(Context, *Response, Request, params: []const Entry) anyerror!void;
     };
 }
 
@@ -88,6 +90,65 @@ pub fn Router(comptime Context: type, comptime routes: []const Route(Context)) R
             }
         }
     }.serve;
+}
+
+/// Will automatically convert router captures to function parameter types
+pub fn wrap(comptime Context: type, comptime handler: anytype) Route(Context).Handler {
+    const info = @typeInfo(@TypeOf(handler));
+    if (info != .Fn)
+        @compileError("router.wrap expects a function type");
+
+    const function_info = info.Fn;
+    if (function_info.is_generic)
+        @compileError("Cannot create handler wrapper for generic function");
+    if (function_info.is_var_args)
+        @compileError("Cannot create handler wrapper for variadic function");
+
+    if (function_info.args[0].arg_type.? != Context)
+        @compileError("Argument 0 of a HandlerFn must be Context");
+    if (function_info.args[1].arg_type.? != *Response)
+        @compileError("Argument 1 of a HandlerFn must be *Response");
+    if (function_info.args[2].arg_type.? != Request)
+        @compileError("Argument 2 of a HandlerFn must be Request");
+
+    const capture_args_info = function_info.args[3..];
+    var capture_arg_types: [capture_args_info.len]type = undefined;
+    for (capture_args_info) |arg, i| {
+        capture_arg_types[i] = arg.arg_type.?;
+    }
+    const CaptureArgs = std.meta.Tuple(&capture_arg_types);
+
+    const X = struct {
+        fn wrapper(ctx: Context, res: *Response, req: Request, params: []const trie.Entry) anyerror!void {
+            var capture_args: CaptureArgs = undefined;
+
+            std.debug.assert(params.len == capture_args.len); // Number of captures must equal the number of extra parameters in the Handler function
+
+            if (capture_args.len == 0) return handler(ctx, res, req);
+
+            comptime var arg_index = 0;
+            inline while (arg_index < capture_args.len) : (arg_index += 1) {
+                capture_args[arg_index] = switch (@TypeOf(capture_args[arg_index])) {
+                    []const u8 => params[arg_index].value,
+                    //?[]const u8 => if (params.len > 0) params[0].value else null,
+                    else => |ArgType| switch (@typeInfo(ArgType)) {
+                        .Int => std.fmt.parseInt(ArgType, params[arg_index].value, 10) catch {
+                            return res.notFound();
+                        },
+                        .Optional => |child| if (@typeInfo(child) == .Int)
+                            std.fmt.parseInt(ArgType, params[arg_index].value, 10) catch null
+                        else
+                            @compileError("Unsupported optional type " ++ @typeName(child)),
+                        else => @compileError("Unsupported type " ++ @typeName(ArgType)),
+                    },
+                };
+            }
+
+            return @call(.{}, handler, .{ ctx, res, req } ++ capture_args);
+        }
+    };
+
+    return X.wrapper;
 }
 
 test {
