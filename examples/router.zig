@@ -18,18 +18,19 @@ pub fn main() !void {
     defer fs.deinit();
 
     var context: Context = .{ .last_route = null };
+    const builder = router.Builder(*Context);
 
     try http.listenAndServe(
         allocator,
         try std.net.Address.parseIp("127.0.0.1", 8080),
         &context,
         comptime router.Router(*Context, &.{
-            .{ .method = .get, .path = "/", .handler = router.wrap(*Context, index) },
-            .{ .method = .get, .path = "/headers", .handler = router.wrap(*Context, headers) },
-            .{ .method = .get, .path = "/files/*", .handler = router.wrap(*Context, serveFs) },
-            .{ .method = .get, .path = "/hello/:name", .handler = router.wrap(*Context, hello) },
-            .{ .method = .get, .path = "/route", .handler = router.wrap(*Context, route) },
-            .{ .method = .get, .path = "/posts/:post/messages/:message", .handler = router.wrap(*Context, messages) },
+            builder.get("/", index),
+            builder.get("/headers", headers),
+            builder.get("/files/*", serveFs),
+            builder.get("/hello/:name", hello),
+            builder.get("/route", route),
+            builder.get("/posts/:post/messages/:message", messages),
         }),
     );
 }

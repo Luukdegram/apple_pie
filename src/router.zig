@@ -151,6 +151,95 @@ pub fn wrap(comptime Context: type, comptime handler: anytype) Route(Context).Ha
     return X.wrapper;
 }
 
+/// Creates a builder namespace, generic over the given `Context`
+/// This makes it easy to create the routers without having to passing
+/// a lot of the types.
+pub fn Builder(comptime Context: type) type {
+    return struct {
+        const Handler = Route(Context).Handler;
+
+        pub fn get(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return Route(Context){
+                .method = .get,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
+
+        pub fn post(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return Route(Context){
+                .method = .post,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
+
+        pub fn patch(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return Route(Context){
+                .method = .patch,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
+
+        pub fn put(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return Route(Context){
+                .method = .put,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
+
+        pub fn any(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return Route(Context){
+                .method = .any,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
+
+        pub fn head(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return Route(Context){
+                .method = .head,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
+
+        pub fn delete(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return Route(Context){
+                .method = .delete,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
+
+        pub fn connect(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return Route(Context){
+                .method = .connect,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
+
+        pub fn options(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return Route(Context){
+                .method = .options,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
+
+        pub fn trace(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return Route(Context){
+                .method = .trace,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
+    };
+}
+
 test {
     std.testing.refAllDecls(@This());
 }
