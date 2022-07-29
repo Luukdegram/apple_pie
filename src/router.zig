@@ -75,7 +75,24 @@ pub fn Router(comptime Context: type, comptime routes: []const Route(Context)) R
     }.serve;
 }
 
-/// Will automatically convert router captures to function parameter types
+/// Will automatically convert router captures from a list of key-values pairs (`[]Entry`) to one of the following:
+///
+/// - nothing, if the `handler` function has only 3 arguments (`fn(Context, *Resposne, Request)`)
+/// - a single string, if the `handler` function looks like `fn(Context, *Resposne, Request, []const u8)`
+/// - a struct where:
+///   - each field is a `[]const u8`
+///   - each field name is one of the parameters in Route `path`
+///
+/// For example, to capture a multiple parameters:
+///
+/// ```zig
+/// const messagesWrapped = wrap(void, messages);
+/// // Path is "/posts/:post/messages/:message"
+/// fn messages(_: void, res: *http.Response, _: http.Request, captures: struct { post: []const u8, message: []const u8 }) !void {
+///     const post = std.fmt.parseInt(usize, captures.post, 10) catch return resp.notFound();
+///     try res.writer().print("Post {d}, message: '{s}'\n", .{ post, captures.message });
+/// }
+/// ```
 pub fn wrap(comptime Context: type, comptime handler: anytype) Route(Context).Handler {
     const info = @typeInfo(@TypeOf(handler));
     if (info != .Fn)
@@ -169,86 +186,63 @@ fn assertIsType(comptime text: []const u8, expected: type, actual: type) void {
 /// a lot of the types.
 pub fn Builder(comptime Context: type) type {
     return struct {
-        const Handler = Route(Context).Handler;
+        /// Creates a new `Route` for the given HTTP Method that will be
+        /// triggered based on its path conditions
+        ///
+        /// When the path contains parameters such as ':<name>' it will be captured
+        /// and passed into the handlerFn as the 4th parameter. See the `wrap` function
+        /// for more information on how captures are passed down.
+        pub fn basicRoute(
+            comptime method: Request.Method,
+            comptime path: []const u8,
+            comptime handlerFn: anytype,
+        ) Route(Context) {
+            return Route(Context){
+                .method = method,
+                .path = path,
+                .handler = wrap(Context, handlerFn),
+            };
+        }
 
+        /// Shorthand function to create a `Route` where method is 'GET'
         pub fn get(path: []const u8, comptime handlerFn: anytype) Route(Context) {
-            return Route(Context){
-                .method = .get,
-                .path = path,
-                .handler = wrap(Context, handlerFn),
-            };
+            return basicRoute(.get, path, handlerFn);
         }
-
+        /// Shorthand function to create a `Route` where method is 'POST'
         pub fn post(path: []const u8, comptime handlerFn: anytype) Route(Context) {
-            return Route(Context){
-                .method = .post,
-                .path = path,
-                .handler = wrap(Context, handlerFn),
-            };
+            return basicRoute(.post, path, handlerFn);
         }
-
+        /// Shorthand function to create a `Route` where method is 'PATCH'
         pub fn patch(path: []const u8, comptime handlerFn: anytype) Route(Context) {
-            return Route(Context){
-                .method = .patch,
-                .path = path,
-                .handler = wrap(Context, handlerFn),
-            };
+            return basicRoute(.patch, path, handlerFn);
         }
-
+        /// Shorthand function to create a `Route` where method is 'PUT'
         pub fn put(path: []const u8, comptime handlerFn: anytype) Route(Context) {
-            return Route(Context){
-                .method = .put,
-                .path = path,
-                .handler = wrap(Context, handlerFn),
-            };
+            return basicRoute(.put, path, handlerFn);
         }
-
+        /// Shorthand function to create a `Route` where method is 'ANY'
         pub fn any(path: []const u8, comptime handlerFn: anytype) Route(Context) {
-            return Route(Context){
-                .method = .any,
-                .path = path,
-                .handler = wrap(Context, handlerFn),
-            };
+            return basicRoute(.any, path, handlerFn);
         }
-
+        /// Shorthand function to create a `Route` where method is 'HEAD'
         pub fn head(path: []const u8, comptime handlerFn: anytype) Route(Context) {
-            return Route(Context){
-                .method = .head,
-                .path = path,
-                .handler = wrap(Context, handlerFn),
-            };
+            return basicRoute(.head, path, handlerFn);
         }
-
+        /// Shorthand function to create a `Route` where method is 'DELETE'
         pub fn delete(path: []const u8, comptime handlerFn: anytype) Route(Context) {
-            return Route(Context){
-                .method = .delete,
-                .path = path,
-                .handler = wrap(Context, handlerFn),
-            };
+            return basicRoute(.delete, path, handlerFn);
         }
-
+        /// Shorthand function to create a `Route` where method is 'CONNECT'
         pub fn connect(path: []const u8, comptime handlerFn: anytype) Route(Context) {
-            return Route(Context){
-                .method = .connect,
-                .path = path,
-                .handler = wrap(Context, handlerFn),
-            };
+            return basicRoute(.connect, path, handlerFn);
         }
-
+        /// Shorthand function to create a `Route` where method is 'OPTIONS'
         pub fn options(path: []const u8, comptime handlerFn: anytype) Route(Context) {
-            return Route(Context){
-                .method = .options,
-                .path = path,
-                .handler = wrap(Context, handlerFn),
-            };
+            return basicRoute(.options, path, handlerFn);
         }
-
+        /// Shorthand function to create a `Route` where method is 'TRACE'
         pub fn trace(path: []const u8, comptime handlerFn: anytype) Route(Context) {
-            return Route(Context){
-                .method = .trace,
-                .path = path,
-                .handler = wrap(Context, handlerFn),
-            };
+            return basicRoute(.trace, path, handlerFn);
         }
     };
 }
