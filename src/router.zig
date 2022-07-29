@@ -104,12 +104,9 @@ pub fn wrap(comptime Context: type, comptime handler: anytype) Route(Context).Ha
     if (function_info.is_var_args)
         @compileError("Cannot create handler wrapper for variadic function");
 
-    if (function_info.args[0].arg_type.? != Context)
-        @compileError("Argument 0 of a HandlerFn must be Context");
-    if (function_info.args[1].arg_type.? != *Response)
-        @compileError("Argument 1 of a HandlerFn must be *Response");
-    if (function_info.args[2].arg_type.? != Request)
-        @compileError("Argument 2 of a HandlerFn must be Request");
+    assertIsType("Expected first argument of handler to be", Context, function_info.args[0].arg_type.?);
+    assertIsType("Expected first argument of handler to be", *Response, function_info.args[1].arg_type.?);
+    assertIsType("Expected first argument of handler to be", Request, function_info.args[2].arg_type.?);
 
     const capture_args_info = function_info.args[3..];
     var capture_arg_types: [capture_args_info.len]type = undefined;
@@ -149,6 +146,11 @@ pub fn wrap(comptime Context: type, comptime handler: anytype) Route(Context).Ha
     };
 
     return X.wrapper;
+}
+
+fn assertIsType(comptime text: []const u8, expected: type, actual: type) void {
+    if (actual != expected)
+        @compileError(text ++ " " ++ @typeName(expected) ++ ", but found type " ++ @typeName(actual) ++ " instead");
 }
 
 /// Creates a builder namespace, generic over the given `Context`
