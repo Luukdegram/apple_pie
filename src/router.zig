@@ -88,8 +88,8 @@ pub fn wrap(comptime Context: type, comptime handler: anytype) Route(Context).Ha
         @compileError("Cannot create handler wrapper for variadic function");
 
     assertIsType("Expected first argument of handler to be", Context, function_info.args[0].arg_type.?);
-    assertIsType("Expected first argument of handler to be", *Response, function_info.args[1].arg_type.?);
-    assertIsType("Expected first argument of handler to be", Request, function_info.args[2].arg_type.?);
+    assertIsType("Expected second argument of handler to be", *Response, function_info.args[1].arg_type.?);
+    assertIsType("Expected third argument of handler to be", Request, function_info.args[2].arg_type.?);
 
     const capture_args_info = function_info.args[3..];
     var capture_arg_types: [capture_args_info.len]type = undefined;
