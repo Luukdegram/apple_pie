@@ -111,69 +111,60 @@ pub fn wrap(comptime Context: type, comptime handler: anytype) Route(Context).Ha
     assertIsType("Expected second argument of handler to be", *Response, function_info.args[1].arg_type.?);
     assertIsType("Expected third argument of handler to be", Request, function_info.args[2].arg_type.?);
 
-    const CapturesExpected = union(enum) {
-        none,
-        one_string,
-        struct_fields: usize,
-    };
-
-    const expected_captures: CapturesExpected = calc_captures_expected: {
-        if (function_info.args.len < 4) {
-            break :calc_captures_expected .none;
-        }
-
-        switch (function_info.args[3].arg_type.?) {
-            []const u8 => break :calc_captures_expected .one_string,
-
-            else => |ArgType| if (@typeInfo(ArgType) == .Struct) {
-                const struct_info = @typeInfo(ArgType).Struct;
-                inline for (struct_info.fields) |field| {
-                    assertIsType("Expected all fields of capture to be", []const u8, field.field_type);
-                }
-                break :calc_captures_expected .{ .struct_fields = struct_info.fields.len };
-            } else {
-                @compileError("Unsupported type `" ++ @typeName(ArgType) ++ "`. Must be `[]const u8` or a struct whose fields are `[]const u8`.");
-            },
-        }
-    };
-
-    const X = struct {
-        fn wrapper(ctx: Context, res: *Response, req: Request, params: []const trie.Entry) anyerror!void {
-            switch (expected_captures) {
-                .none => {
-                    std.debug.assert(params.len == 0);
-                    return handler(ctx, res, req);
-                },
-                .one_string => {
-                    std.debug.assert(params.len == 1);
-                    return handler(ctx, res, req, params[0].value);
-                },
-                .struct_fields => |num_fields_expected| {
-                    std.debug.assert(params.len == num_fields_expected);
-
-                    const CaptureStruct = function_info.args[3].arg_type.?;
-                    var captures: CaptureStruct = undefined;
-
-                    for (params) |param| {
-                        // Using a variable here instead of something like `continue :params_loop` because that causes the compiler to crash with exit code 11.
-                        var matched_a_field = false;
-                        inline for (@typeInfo(CaptureStruct).Struct.fields) |field| {
-                            if (std.mem.eql(u8, param.key, field.name)) {
-                                @field(captures, field.name) = param.value;
-                                matched_a_field = true;
-                            }
-                        }
-                        if (!matched_a_field)
-                            std.debug.panic("Unexpected capture \"{}\", no such field in {s}", .{ std.zig.fmtEscapes(param.key), @typeName(CaptureStruct) });
-                    }
-
-                    return handler(ctx, res, req, captures);
-                },
+    if (function_info.args.len < 4) {
+        // There is no 4th parameter, we can just ignore `params`
+        const X = struct {
+            fn wrapped(ctx: Context, res: *Response, req: Request, params: []const trie.Entry) anyerror!void {
+                std.debug.assert(params.len == 0);
+                return handler(ctx, res, req);
             }
-        }
-    };
+        };
+        return X.wrapped;
+    }
 
-    return X.wrapper;
+    const ArgType = function_info.args[3].arg_type.?;
+
+    if (ArgType == []const u8) {
+        // There 4th parameter is a string
+        const X = struct {
+            fn wrapped(ctx: Context, res: *Response, req: Request, params: []const trie.Entry) anyerror!void {
+                std.debug.assert(params.len == 1);
+                return handler(ctx, res, req, params[0].value);
+            }
+        };
+        return X.wrapped;
+    }
+
+    if (@typeInfo(ArgType) == .Struct) {
+        // There 4th parameter is a struct
+        const X = struct {
+            fn wrapped(ctx: Context, res: *Response, req: Request, params: []const trie.Entry) anyerror!void {
+                const CaptureStruct = function_info.args[3].arg_type.?;
+                var captures: CaptureStruct = undefined;
+
+                std.debug.assert(params.len == @typeInfo(CaptureStruct).Struct.fields.len);
+
+                for (params) |param| {
+                    // Using a variable here instead of something like `continue :params_loop` because that causes the compiler to crash with exit code 11.
+                    var matched_a_field = false;
+                    inline for (@typeInfo(CaptureStruct).Struct.fields) |field| {
+                        assertIsType("Expected field " ++ field.name ++ " of " ++ @typeName(CaptureStruct) ++ " to be", []const u8, field.field_type);
+                        if (std.mem.eql(u8, param.key, field.name)) {
+                            @field(captures, field.name) = param.value;
+                            matched_a_field = true;
+                        }
+                    }
+                    if (!matched_a_field)
+                        std.debug.panic("Unexpected capture \"{}\", no such field in {s}", .{ std.zig.fmtEscapes(param.key), @typeName(CaptureStruct) });
+                }
+
+                return handler(ctx, res, req, captures);
+            }
+        };
+        return X.wrapped;
+    }
+
+    @compileError("Unsupported type `" ++ @typeName(ArgType) ++ "`. Must be `[]const u8` or a struct whose fields are `[]const u8`.");
 }
 
 fn assertIsType(comptime text: []const u8, expected: type, actual: type) void {
