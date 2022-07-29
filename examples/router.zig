@@ -77,8 +77,11 @@ fn serveFs(ctx: *Context, resp: *http.Response, req: http.Request) !void {
 }
 
 /// Shows the post number and message text
-fn messages(ctx: *Context, resp: *http.Response, req: http.Request, post: usize, message: []const u8) !void {
+fn messages(ctx: *Context, resp: *http.Response, req: http.Request, captures: struct { post: []const u8, message: []const u8 }) !void {
     _ = ctx;
     _ = req;
-    try resp.writer().print("Post {d}, message: '{s}'\n", .{ post, message });
+    const post = std.fmt.parseInt(usize, captures.post, 10) catch {
+        return resp.notFound();
+    };
+    try resp.writer().print("Post {d}, message: '{s}'\n", .{ post, captures.message });
 }
