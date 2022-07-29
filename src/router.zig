@@ -35,23 +35,6 @@ pub fn Router(comptime Context: type, comptime routes: []const Route(Context)) R
     inline for (trees) |*t| t.* = trie.Trie(u8){};
 
     inline for (routes) |r, i| {
-        if (@typeInfo(@TypeOf(r.handler)) != .Fn) @compileError("Handler must be a function");
-
-        const args = @typeInfo(@TypeOf(r.handler)).Fn.args;
-
-        if (args.len < 3) {
-            @compileError("Handler must have atleast 3 arguments");
-        }
-        if (args[0].arg_type.? != Context) {
-            @compileError("Expected type '" ++ @typeName(Context) ++ "', but found type '" ++ @typeName(args[0].arg_type.?) ++ "'");
-        }
-        if (args[1].arg_type.? != *Response) {
-            @compileError("Second parameter must be of type " ++ @typeName(*Response));
-        }
-        if (args[2].arg_type.? != Request) {
-            @compileError("Third parameter must be of type " ++ @typeName(Request));
-        }
-
         trees[@enumToInt(r.method)].insert(r.path, i);
     }
 
