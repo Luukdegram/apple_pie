@@ -11,20 +11,20 @@ const Request = @import("Request.zig");
 const Response = @import("response.zig").Response;
 const RequestHandler = @import("server.zig").RequestHandler;
 
+pub const Entry = trie.Entry;
+
 /// Route defines the path, method and how to parse such path
 /// into a type that the handler can accept.
 pub fn Route(comptime Context: type) type {
     return struct {
         /// Path by which the route is triggered
         path: []const u8,
-        /// The type the path captures will be transformed into
-        /// This type will be passed as an '*const anyopaque' as the final argument
-        /// to the route handler.
-        capture_type: ?type = null,
         /// The handler function that will be called when triggered
-        handler: fn handle(Context, *Response, Request, ?*const anyopaque) anyerror!void,
+        handler: Handler,
         /// http method
         method: Request.Method,
+
+        const Handler = fn handle(Context, *Response, Request, params: []const Entry) anyerror!void;
     };
 }
 
@@ -35,70 +35,11 @@ pub fn Router(comptime Context: type, comptime routes: []const Route(Context)) R
     inline for (trees) |*t| t.* = trie.Trie(u8){};
 
     inline for (routes) |r, i| {
-        if (@typeInfo(@TypeOf(r.handler)) != .Fn) @compileError("Handler must be a function");
-
-        const args = @typeInfo(@TypeOf(r.handler)).Fn.args;
-
-        if (args.len < 3) {
-            @compileError("Handler must have atleast 3 arguments");
-        }
-        if (args[0].arg_type.? != Context) {
-            @compileError("Expected type '" ++ @typeName(Context) ++ "', but found type '" ++ @typeName(args[0].arg_type.?) ++ "'");
-        }
-        if (args[1].arg_type.? != *Response) {
-            @compileError("Second parameter must be of type " ++ @typeName(*Response));
-        }
-        if (args[2].arg_type.? != Request) {
-            @compileError("Third parameter must be of type " ++ @typeName(Request));
-        }
-
         trees[@enumToInt(r.method)].insert(r.path, i);
     }
 
     return struct {
         const Self = @This();
-
-        fn handle(comptime route: Route(Context), params: []const trie.Entry, ctx: Context, res: *Response, req: Request) !void {
-            if (route.capture_type == null) return route.handler(ctx, res, req, null);
-            const ArgType = route.capture_type.?;
-
-            const param: ArgType = switch (ArgType) {
-                []const u8 => if (params.len > 0) params[0].value else &[_]u8{},
-                ?[]const u8 => if (params.len > 0) params[0].value else null,
-                else => switch (@typeInfo(ArgType)) {
-                    .Struct => |info| blk: {
-                        var new_struct: ArgType = undefined;
-                        inline for (info.fields) |field| {
-                            for (params) |p| {
-                                if (std.mem.eql(u8, field.name, p.key)) {
-                                    const FieldType = @TypeOf(@field(new_struct, field.name));
-
-                                    @field(new_struct, field.name) = switch (FieldType) {
-                                        []const u8, ?[]const u8 => p.value,
-                                        else => switch (@typeInfo(FieldType)) {
-                                            .Int => std.fmt.parseInt(FieldType, p.value, 10) catch 0,
-                                            .Optional => |child| if (@typeInfo(child) == .Int)
-                                                std.fmt.parseInt(FieldType, p.value, 10) catch null
-                                            else
-                                                @compileError("Unsupported optional type " ++ @typeName(child)),
-                                            else => @compileError("Unsupported type " ++ @typeName(FieldType)),
-                                        },
-                                    };
-                                }
-                            }
-                        }
-                        break :blk new_struct;
-                    },
-                    .Int => std.fmt.parseInt(ArgType, params[0].value, 10) catch 0,
-                    .Optional => |child| if (@typeInfo(child) == .Int)
-                        std.fmt.parseInt(ArgType, params[0].value, 10) catch null
-                    else
-                        @compileError("Unsupported optional type " ++ @typeName(child)),
-                    else => @compileError("Unsupported type " ++ @typeName(ArgType)),
-                },
-            };
-            return route.handler(ctx, res, req, @ptrCast(?*const anyopaque, &param));
-        }
 
         pub fn serve(context: Context, response: *Response, request: Request) !void {
             switch (trees[@enumToInt(request.method())].get(request.path())) {
@@ -108,25 +49,25 @@ pub fn Router(comptime Context: type, comptime routes: []const Route(Context)) R
                         .none => return response.notFound(),
                         .static => |index| {
                             inline for (routes) |route, i|
-                                if (index == i) return Self.handle(route, &.{}, context, response, request);
+                                if (index == i) return route.handler(context, response, request, &.{});
                         },
                         .with_params => |object| {
                             inline for (routes) |route, i| {
                                 if (object.data == i)
-                                    return Self.handle(route, object.params[0..object.param_count], context, response, request);
+                                    return route.handler(context, response, request, object.params[0..object.param_count]);
                             }
                         },
                     }
                 },
                 .static => |index| {
                     inline for (routes) |route, i| {
-                        if (index == i) return Self.handle(route, &.{}, context, response, request);
+                        if (index == i) return route.handler(context, response, request, &.{});
                     }
                 },
                 .with_params => |object| {
                     inline for (routes) |route, i| {
                         if (object.data == i)
-                            return Self.handle(route, object.params[0..object.param_count], context, response, request);
+                            return route.handler(context, response, request, object.params[0..object.param_count]);
                     }
                 },
             }
@@ -134,72 +75,165 @@ pub fn Router(comptime Context: type, comptime routes: []const Route(Context)) R
     }.serve;
 }
 
+/// Will automatically convert router captures from a list of key-values pairs (`[]Entry`) to one of the following:
+///
+/// - nothing, if the `handler` function has only 3 arguments (`fn(Context, *Resposne, Request)`)
+/// - a single string, if the `handler` function looks like `fn(Context, *Resposne, Request, []const u8)`
+/// - a struct where:
+///   - each field is a `[]const u8`
+///   - each field name is one of the parameters in Route `path`
+///
+/// For example, to capture a multiple parameters:
+///
+/// ```zig
+/// const messagesWrapped = wrap(void, messages);
+/// // Path is "/posts/:post/messages/:message"
+/// fn messages(_: void, res: *http.Response, _: http.Request, captures: struct { post: []const u8, message: []const u8 }) !void {
+///     const post = std.fmt.parseInt(usize, captures.post, 10) catch return resp.notFound();
+///     try res.writer().print("Post {d}, message: '{s}'\n", .{ post, captures.message });
+/// }
+/// ```
+pub fn wrap(comptime Context: type, comptime handler: anytype) Route(Context).Handler {
+    const info = @typeInfo(@TypeOf(handler));
+    if (info != .Fn)
+        @compileError("router.wrap expects a function type");
+
+    const function_info = info.Fn;
+    if (function_info.is_generic)
+        @compileError("Cannot create handler wrapper for generic function");
+    if (function_info.is_var_args)
+        @compileError("Cannot create handler wrapper for variadic function");
+
+    if (function_info.args.len < 3)
+        @compileError("Expected at least 3 args in Handler function; (" ++ @typeName(Context) ++ ", " ++ @typeName(*Response) ++ ", " ++ @typeName(Request) ++ ")]");
+
+    assertIsType("Expected first argument of handler to be", Context, function_info.args[0].arg_type.?);
+    assertIsType("Expected second argument of handler to be", *Response, function_info.args[1].arg_type.?);
+    assertIsType("Expected third argument of handler to be", Request, function_info.args[2].arg_type.?);
+
+    if (function_info.args.len < 4) {
+        // There is no 4th parameter, we can just ignore `params`
+        const X = struct {
+            fn wrapped(ctx: Context, res: *Response, req: Request, params: []const trie.Entry) anyerror!void {
+                std.debug.assert(params.len == 0);
+                return handler(ctx, res, req);
+            }
+        };
+        return X.wrapped;
+    }
+
+    const ArgType = function_info.args[3].arg_type.?;
+
+    if (ArgType == []const u8) {
+        // There 4th parameter is a string
+        const X = struct {
+            fn wrapped(ctx: Context, res: *Response, req: Request, params: []const trie.Entry) anyerror!void {
+                std.debug.assert(params.len == 1);
+                return handler(ctx, res, req, params[0].value);
+            }
+        };
+        return X.wrapped;
+    }
+
+    if (@typeInfo(ArgType) == .Struct) {
+        // There 4th parameter is a struct
+        const X = struct {
+            fn wrapped(ctx: Context, res: *Response, req: Request, params: []const trie.Entry) anyerror!void {
+                const CaptureStruct = function_info.args[3].arg_type.?;
+                var captures: CaptureStruct = undefined;
+
+                std.debug.assert(params.len == @typeInfo(CaptureStruct).Struct.fields.len);
+
+                for (params) |param| {
+                    // Using a variable here instead of something like `continue :params_loop` because that causes the compiler to crash with exit code 11.
+                    var matched_a_field = false;
+                    inline for (@typeInfo(CaptureStruct).Struct.fields) |field| {
+                        assertIsType("Expected field " ++ field.name ++ " of " ++ @typeName(CaptureStruct) ++ " to be", []const u8, field.field_type);
+                        if (std.mem.eql(u8, param.key, field.name)) {
+                            @field(captures, field.name) = param.value;
+                            matched_a_field = true;
+                        }
+                    }
+                    if (!matched_a_field)
+                        std.debug.panic("Unexpected capture \"{}\", no such field in {s}", .{ std.zig.fmtEscapes(param.key), @typeName(CaptureStruct) });
+                }
+
+                return handler(ctx, res, req, captures);
+            }
+        };
+        return X.wrapped;
+    }
+
+    @compileError("Unsupported type `" ++ @typeName(ArgType) ++ "`. Must be `[]const u8` or a struct whose fields are `[]const u8`.");
+}
+
+fn assertIsType(comptime text: []const u8, expected: type, actual: type) void {
+    if (actual != expected)
+        @compileError(text ++ " " ++ @typeName(expected) ++ ", but found type " ++ @typeName(actual) ++ " instead");
+}
+
 /// Creates a builder namespace, generic over the given `Context`
 /// This makes it easy to create the routers without having to passing
 /// a lot of the types.
 pub fn Builder(comptime Context: type) type {
     return struct {
-        /// The generic handler type that all routes must match
-        pub const HandlerType = fn (Context, *Response, Request, ?*const anyopaque) anyerror!void;
-
         /// Creates a new `Route` for the given HTTP Method that will be
         /// triggered based on its path conditions
         ///
         /// When the path contains parameters such as ':<name>' it will be captured
-        /// and parsed into the type given as `capture_type`.
+        /// and passed into the handlerFn as the 4th parameter. See the `wrap` function
+        /// for more information on how captures are passed down.
         pub fn basicRoute(
             comptime method: Request.Method,
             comptime path: []const u8,
-            comptime CaptureType: ?type,
-            comptime handler: HandlerType,
+            comptime handlerFn: anytype,
         ) Route(Context) {
-            return .{
+            return Route(Context){
                 .method = method,
                 .path = path,
-                .capture_type = CaptureType,
-                .handler = handler,
+                .handler = wrap(Context, handlerFn),
             };
         }
 
         /// Shorthand function to create a `Route` where method is 'GET'
-        pub fn get(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
-            return basicRoute(.get, path, CaptureType, handler);
+        pub fn get(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return basicRoute(.get, path, handlerFn);
         }
         /// Shorthand function to create a `Route` where method is 'POST'
-        pub fn post(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
-            return basicRoute(.post, path, CaptureType, handler);
+        pub fn post(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return basicRoute(.post, path, handlerFn);
         }
         /// Shorthand function to create a `Route` where method is 'PATCH'
-        pub fn patch(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
-            return basicRoute(.patch, path, CaptureType, handler);
+        pub fn patch(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return basicRoute(.patch, path, handlerFn);
         }
         /// Shorthand function to create a `Route` where method is 'PUT'
-        pub fn put(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
-            return basicRoute(.put, path, CaptureType, handler);
+        pub fn put(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return basicRoute(.put, path, handlerFn);
         }
-        /// Shorthand function to create a `Route` which matches with any method
-        pub fn any(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
-            return basicRoute(.any, path, CaptureType, handler);
+        /// Shorthand function to create a `Route` where method is 'ANY'
+        pub fn any(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return basicRoute(.any, path, handlerFn);
         }
         /// Shorthand function to create a `Route` where method is 'HEAD'
-        pub fn head(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
-            return basicRoute(.head, path, CaptureType, handler);
+        pub fn head(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return basicRoute(.head, path, handlerFn);
         }
         /// Shorthand function to create a `Route` where method is 'DELETE'
-        pub fn delete(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
-            return basicRoute(.delete, path, CaptureType, handler);
+        pub fn delete(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return basicRoute(.delete, path, handlerFn);
         }
         /// Shorthand function to create a `Route` where method is 'CONNECT'
-        pub fn connect(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
-            return basicRoute(.connect, path, CaptureType, handler);
+        pub fn connect(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return basicRoute(.connect, path, handlerFn);
         }
         /// Shorthand function to create a `Route` where method is 'OPTIONS'
-        pub fn options(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
-            return basicRoute(.options, path, CaptureType, handler);
+        pub fn options(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return basicRoute(.options, path, handlerFn);
         }
         /// Shorthand function to create a `Route` where method is 'TRACE'
-        pub fn trace(comptime path: []const u8, comptime CaptureType: ?type, comptime handler: HandlerType) Route(Context) {
-            return basicRoute(.trace, path, CaptureType, handler);
+        pub fn trace(path: []const u8, comptime handlerFn: anytype) Route(Context) {
+            return basicRoute(.trace, path, handlerFn);
         }
     };
 }

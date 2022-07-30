@@ -42,7 +42,7 @@ pub fn build(b: *Builder) void {
         var example = b.addExecutable(opt, example_file);
         example.addPackage(.{
             .name = "apple_pie",
-            .path = .{ .path = "src/apple_pie.zig" },
+            .source = .{ .path = "src/apple_pie.zig" },
         });
         example.setBuildMode(mode);
         example.install();
