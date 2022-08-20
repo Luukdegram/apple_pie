@@ -8,6 +8,7 @@ pub fn build(b: *Builder) void {
     {
         const lib = b.addStaticLibrary("apple_pie", "src/server.zig");
         lib.setBuildMode(mode);
+        lib.use_stage1 = true;
         lib.install();
     }
 
@@ -15,6 +16,7 @@ pub fn build(b: *Builder) void {
     {
         var main_tests = b.addTest("src/apple_pie.zig");
         main_tests.setBuildMode(mode);
+        main_tests.use_stage1 = true;
         const test_step = b.step("test", "Run library tests");
         test_step.dependOn(&main_tests.step);
     }
@@ -45,6 +47,7 @@ pub fn build(b: *Builder) void {
             .source = .{ .path = "src/apple_pie.zig" },
         });
         example.setBuildMode(mode);
+        example.use_stage1 = true;
         example.install();
 
         const run_example = example.run();

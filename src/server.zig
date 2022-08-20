@@ -53,7 +53,8 @@ pub fn listenAndServe(
     /// User defined `Request`/`Response` handler
     comptime handler: RequestHandler(@TypeOf(context)),
 ) !void {
-    try (Server.init()).run(gpa, address, context, handler);
+    var server = Server.init();
+    try server.run(gpa, address, context, handler);
 }
 
 pub const Server = struct {
