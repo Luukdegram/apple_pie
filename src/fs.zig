@@ -44,7 +44,7 @@ pub const ServeError = error{
     NotAFile,
 } || Response.Error || std.os.SendFileError || std.fs.File.OpenError;
 
-/// Servers a file based on the path of the request
+/// Serves a file based on the path of the request
 pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
     _ = ctx;
     std.debug.assert(initialized);
@@ -67,7 +67,23 @@ pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
     // and therefore has access to outside root.
     if (std.mem.startsWith(u8, path, "..")) return response.notFound();
 
-    const file = dir.openFile(path, .{}) catch |err| switch (err) {
+    // if the path is '', we should serve the index at root
+    const new_path = if (path.len == 0) index else blk: {
+        // if the path is a directory, we should serve the index inside
+        const stat = dir.statFile(path) catch |err| switch (err) {
+            error.FileNotFound => return response.notFound(),
+            else => |e| return e,
+        };
+        if (stat.kind == .Directory) {
+            break :blk try std.mem.concat(alloc, u8, &.{ path, "/", index });
+        }
+        // otherwise, we should serve the file at path
+        else {
+            break :blk path;
+        }
+    };
+
+    const file = dir.openFile(new_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return response.notFound(),
         else => |e| return e,
     };
