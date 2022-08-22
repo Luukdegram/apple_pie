@@ -68,19 +68,17 @@ pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
     if (std.mem.startsWith(u8, path, "..")) return response.notFound();
 
     // if the path is '', we should serve the index at root
+    var buf_new_path: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     const new_path = if (path.len == 0) index else blk: {
         // if the path is a directory, we should serve the index inside
         const stat = dir.statFile(path) catch |err| switch (err) {
             error.FileNotFound => return response.notFound(),
             else => |e| return e,
         };
-        if (stat.kind == .Directory) {
-            break :blk try std.mem.concat(alloc, u8, &.{ path, "/", index });
-        }
+        if (stat.kind == .Directory)
+            break :blk try std.fmt.bufPrint(&buf_new_path, "{s}/{s}", .{ path, index });
         // otherwise, we should serve the file at path
-        else {
-            break :blk path;
-        }
+        break :blk path;
     };
 
     const file = dir.openFile(new_path, .{}) catch |err| switch (err) {
