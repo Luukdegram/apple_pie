@@ -220,12 +220,26 @@ test "File server test" {
     try stream.writer().writeAll("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
 
     var buf: [512]u8 = undefined;
-    const len = try stream.reader().read(&buf);
+    var len = try stream.reader().read(&buf);
+    const body_start = 4 + (std.mem.indexOf(u8, buf[0..len], "\r\n\r\n") orelse return error.Unexpected);
+
+    // making sure we received the entire response body before closing the stream
+    var tries: usize = 0;
+    while (tries < 3) : (tries += 1) {
+        // making sure we find the Content-Length header, otherwise break
+        const content_length_start = std.mem.indexOf(u8, buf[0..len], "Content-Length: ") orelse break;
+        const content_length_end = content_length_start + (std.mem.indexOf(u8, buf[content_length_start..len], "\r\n") orelse return error.Unexpected);
+        const content_length = try std.fmt.parseUnsigned(usize, buf[content_length_start + 16 .. content_length_end], 10);
+
+        // if we received the expected amount of bytes, we break to close the stream
+        const expected_len = body_start + content_length;
+        if (expected_len == len)
+            break;
+        len += try stream.reader().read(buf[len..]);
+    }
     stream.close();
     thread.join();
 
-    const index = std.mem.indexOf(u8, buf[0..len], "\r\n\r\n") orelse return error.Unexpected;
-
-    const answer = buf[index + 4 .. len];
+    const answer = buf[body_start..len];
     try std.testing.expectEqualStrings(test_message, answer);
 }
