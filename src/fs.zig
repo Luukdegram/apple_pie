@@ -168,39 +168,39 @@ test "File server test" {
     const address = try net.Address.parseIp("0.0.0.0", 8080);
     var server = Server.init();
 
+    // setup files to serve
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var buf_dir_path: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const dir_path = try tmp_dir.dir.realpath(".", &buf_dir_path);
+    try tmp_dir.dir.writeFile("index.html", test_message);
+
+    // making sure the file was written before continuing
+    while (true) {
+        var buf: [32]u8 = undefined;
+        const content = tmp_dir.dir.readFile("index.html", &buf) catch continue;
+        if (std.mem.eql(u8, content, test_message))
+            break;
+    }
+
     const server_thread = struct {
         var _addr: net.Address = undefined;
+        var _dir: []u8 = undefined;
 
         fn index(ctx: void, resp: *Response, req: Request) !void {
             _ = ctx;
             try serve({}, resp, req);
         }
         fn runServer(context: *Server) !void {
+            // initialize fileserver
+            try init(test_alloc, .{ .dir_path = _dir });
+            defer deinit();
+
             try context.run(test_alloc, _addr, {}, index);
         }
     };
     server_thread._addr = address;
-
-    // setup files to serve
-    const cwd = std.fs.cwd();
-    cwd.makeDir("tmp-dir-for-tests") catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-    defer cwd.deleteTree("tmp-dir-for-tests") catch unreachable;
-    try cwd.writeFile("tmp-dir-for-tests/index.html", test_message);
-
-    // making sure the file was written before continuing
-    while (true) {
-        var buf: [32]u8 = undefined;
-        const content = cwd.readFile("tmp-dir-for-tests/index.html", &buf) catch continue;
-        if (std.mem.eql(u8, content, test_message))
-            break;
-    }
-
-    // initialize fileserver
-    try init(test_alloc, .{ .dir_path = "tmp-dir-for-tests" });
-    defer deinit();
+    server_thread._dir = dir_path;
 
     const thread = try std.Thread.spawn(.{}, server_thread.runServer, .{&server});
     errdefer server.shutdown();
