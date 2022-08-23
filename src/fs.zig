@@ -157,3 +157,75 @@ pub fn serveFile(
         remaining -= try std.os.sendfile(out, file.handle, len - remaining, remaining, &.{}, &.{}, 0);
     }
 }
+
+test "File server test" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    const Server = @import("server.zig").Server;
+    const net = std.net;
+
+    const test_alloc = std.testing.allocator;
+    const test_message = "Hello, Apple pie!";
+    const address = try net.Address.parseIp("0.0.0.0", 8080);
+    var server = Server.init();
+
+    const server_thread = struct {
+        var _addr: net.Address = undefined;
+
+        fn index(ctx: void, resp: *Response, req: Request) !void {
+            _ = ctx;
+            try serve({}, resp, req);
+        }
+        fn runServer(context: *Server) !void {
+            try context.run(test_alloc, _addr, {}, index);
+        }
+    };
+    server_thread._addr = address;
+
+    // setup files to serve
+    const cwd = std.fs.cwd();
+    cwd.makeDir("tmp-dir-for-tests") catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    defer cwd.deleteTree("tmp-dir-for-tests") catch unreachable;
+    try cwd.writeFile("tmp-dir-for-tests/index.html", test_message);
+
+    // making sure the file was written before continuing
+    while (true) {
+        var buf: [32]u8 = undefined;
+        const content = cwd.readFile("tmp-dir-for-tests/index.html", &buf) catch continue;
+        if (std.mem.eql(u8, content, test_message))
+            break;
+    }
+
+    // initialize fileserver
+    try init(test_alloc, .{ .dir_path = "tmp-dir-for-tests" });
+    defer deinit();
+
+    const thread = try std.Thread.spawn(.{}, server_thread.runServer, .{&server});
+    errdefer server.shutdown();
+
+    var stream = while (true) {
+        var conn = net.tcpConnectToAddress(address) catch |err| switch (err) {
+            error.ConnectionRefused => continue,
+            else => return err,
+        };
+
+        break conn;
+    } else unreachable;
+    errdefer stream.close();
+    // tell server to shutdown
+    // will finish current request and then shutdown
+    server.shutdown();
+    try stream.writer().writeAll("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+
+    var buf: [512]u8 = undefined;
+    const len = try stream.reader().read(&buf);
+    stream.close();
+    thread.join();
+
+    const index = std.mem.indexOf(u8, buf[0..len], "\r\n\r\n") orelse return error.Unexpected;
+
+    const answer = buf[index + 4 .. len];
+    try std.testing.expectEqualStrings(test_message, answer);
+}
