@@ -44,7 +44,7 @@ pub const ServeError = error{
     NotAFile,
 } || Response.Error || std.os.SendFileError || std.fs.File.OpenError;
 
-/// Servers a file based on the path of the request
+/// Serves a file based on the path of the request
 pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
     _ = ctx;
     std.debug.assert(initialized);
@@ -67,7 +67,21 @@ pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
     // and therefore has access to outside root.
     if (std.mem.startsWith(u8, path, "..")) return response.notFound();
 
-    const file = dir.openFile(path, .{}) catch |err| switch (err) {
+    // if the path is '', we should serve the index at root
+    var buf_new_path: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const new_path = if (path.len == 0) index else blk: {
+        // if the path is a directory, we should serve the index inside
+        const stat = dir.statFile(path) catch |err| switch (err) {
+            error.FileNotFound => return response.notFound(),
+            else => |e| return e,
+        };
+        if (stat.kind == .Directory)
+            break :blk try std.fmt.bufPrint(&buf_new_path, "{s}/{s}", .{ path, index });
+        // otherwise, we should serve the file at path
+        break :blk path;
+    };
+
+    const file = dir.openFile(new_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return response.notFound(),
         else => |e| return e,
     };
@@ -142,4 +156,90 @@ pub fn serveFile(
     while (remaining > 0) {
         remaining -= try std.os.sendfile(out, file.handle, len - remaining, remaining, &.{}, &.{}, 0);
     }
+}
+
+test "File server test" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    const Server = @import("server.zig").Server;
+    const net = std.net;
+
+    const test_alloc = std.testing.allocator;
+    const test_message = "Hello, Apple pie!";
+    const address = try net.Address.parseIp("0.0.0.0", 8080);
+    var server = Server.init();
+
+    // setup files to serve
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var buf_dir_path: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const dir_path = try tmp_dir.dir.realpath(".", &buf_dir_path);
+    try tmp_dir.dir.writeFile("index.html", test_message);
+
+    // making sure the file was written before continuing
+    while (true) {
+        var buf: [32]u8 = undefined;
+        const content = tmp_dir.dir.readFile("index.html", &buf) catch continue;
+        if (std.mem.eql(u8, content, test_message))
+            break;
+    }
+
+    const server_thread = struct {
+        var _addr: net.Address = undefined;
+        var _dir: []u8 = undefined;
+
+        fn index(ctx: void, resp: *Response, req: Request) !void {
+            _ = ctx;
+            try serve({}, resp, req);
+        }
+        fn runServer(context: *Server) !void {
+            // initialize fileserver
+            try init(test_alloc, .{ .dir_path = _dir });
+            defer deinit();
+
+            try context.run(test_alloc, _addr, {}, index);
+        }
+    };
+    server_thread._addr = address;
+    server_thread._dir = dir_path;
+
+    const thread = try std.Thread.spawn(.{}, server_thread.runServer, .{&server});
+    errdefer server.shutdown();
+
+    var stream = while (true) {
+        var conn = net.tcpConnectToAddress(address) catch |err| switch (err) {
+            error.ConnectionRefused => continue,
+            else => return err,
+        };
+
+        break conn;
+    } else unreachable;
+    errdefer stream.close();
+    // tell server to shutdown
+    // will finish current request and then shutdown
+    server.shutdown();
+    try stream.writer().writeAll("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+
+    var buf: [512]u8 = undefined;
+    var len = try stream.reader().read(&buf);
+    const body_start = 4 + (std.mem.indexOf(u8, buf[0..len], "\r\n\r\n") orelse return error.Unexpected);
+
+    // making sure we received the entire response body before closing the stream
+    var tries: usize = 0;
+    while (tries < 3) : (tries += 1) {
+        // making sure we find the Content-Length header, otherwise break
+        const content_length_start = std.mem.indexOf(u8, buf[0..len], "Content-Length: ") orelse break;
+        const content_length_end = content_length_start + (std.mem.indexOf(u8, buf[content_length_start..len], "\r\n") orelse return error.Unexpected);
+        const content_length = try std.fmt.parseUnsigned(usize, buf[content_length_start + 16 .. content_length_end], 10);
+
+        // if we received the expected amount of bytes, we break to close the stream
+        const expected_len = body_start + content_length;
+        if (expected_len == len)
+            break;
+        len += try stream.reader().read(buf[len..]);
+    }
+    stream.close();
+    thread.join();
+
+    const answer = buf[body_start..len];
+    try std.testing.expectEqualStrings(test_message, answer);
 }
