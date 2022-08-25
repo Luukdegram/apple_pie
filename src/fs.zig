@@ -87,7 +87,7 @@ pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
     };
     defer file.close();
 
-    serveFile(response, request.path(), file) catch |err| switch (err) {
+    serveFile(response, new_path, file) catch |err| switch (err) {
         error.NotAFile => return response.notFound(),
         else => return err,
     };
