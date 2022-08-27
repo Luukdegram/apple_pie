@@ -10,6 +10,7 @@ const MimeType = @import("mime_type.zig").MimeType;
 const Uri = @import("Uri.zig");
 const Allocator = std.mem.Allocator;
 const fs = std.fs;
+const fmtDate = @import("date.zig").fmtDate;
 
 pub const FileServer = @This();
 
@@ -142,51 +143,7 @@ pub fn serveFile(
 
     try stream.print("Content-Length: {d}\r\n", .{len});
     try stream.print("Content-Type: {s}\r\n", .{MimeType.fromFileName(file_name).toString()});
-
-    const timestamp = @intCast(u64, @divFloor(stat.mtime, std.time.ns_per_s));
-    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = timestamp };
-    const epoch_day = epoch_seconds.getEpochDay();
-    const year_day = epoch_day.calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-
-    const day_seconds = epoch_seconds.getDaySeconds();
-    const day_string = switch (epoch_day.day % 7) {
-        0 => "Thu", // UTC time starts on Thursday
-        1 => "Fri",
-        2 => "Sat",
-        3 => "Sun",
-        4 => "Mon",
-        5 => "Tue",
-        6 => "Wed",
-        else => unreachable,
-    };
-    const month_string = switch (month_day.month) {
-        .jan => "Jan",
-        .feb => "Feb",
-        .mar => "Mar",
-        .apr => "Apr",
-        .may => "May",
-        .jun => "Jun",
-        .jul => "Jul",
-        .aug => "Aug",
-        .sep => "Sep",
-        .oct => "Oct",
-        .nov => "Nov",
-        .dec => "Dec",
-    };
-
-    try stream.print(
-        "Last-Modified: {s}, {d:0>2} {s} {d:0>4} {d:0>2}:{d:0>2}:{d:0>2} GMT\r\n",
-        .{
-            day_string,
-            month_day.day_index + 1,
-            month_string,
-            year_day.year,
-            day_seconds.getHoursIntoDay(),
-            day_seconds.getMinutesIntoHour(),
-            day_seconds.getSecondsIntoMinute(),
-        },
-    );
+    try stream.print("Last-Modified: {}\r\n", .{fmtDate(stat.mtime)});
 
     if (!std.io.is_async) {
         try stream.writeAll("Connection: close\r\n");
