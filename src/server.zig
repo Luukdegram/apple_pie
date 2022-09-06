@@ -17,7 +17,7 @@ const Queue = atomic.Queue;
 
 /// User API function signature of a request handler
 pub fn RequestHandler(comptime Context: type) type {
-    return fn handle(Context, *Response, Request) anyerror!void;
+    return fn (Context, *Response, Request) anyerror!void;
 }
 
 /// Allows users to set the max buffer size before we allocate memory on the heap to store our data
