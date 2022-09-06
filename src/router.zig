@@ -24,7 +24,7 @@ pub fn Route(comptime Context: type) type {
         /// http method
         method: Request.Method,
 
-        const Handler = fn handle(Context, *Response, Request, params: []const Entry) anyerror!void;
+        const Handler = fn (Context, *Response, Request, params: []const Entry) anyerror!void;
     };
 }
 
