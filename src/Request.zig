@@ -308,7 +308,7 @@ const FormIterator = struct {
                 if (batch[field_start] == '"') field_start += 1;
 
                 var field_end = field_start;
-                for (batch[field_end..]) |c, i| {
+                for (batch[field_end..], 0..) |c, i| {
                     if (c == '"' or c == '\n') {
                         field_end += i;
                         break;

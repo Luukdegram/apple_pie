@@ -34,7 +34,7 @@ pub fn Router(comptime Context: type, comptime routes: []const Route(Context)) R
     comptime var trees: [10]trie.Trie(u8) = undefined;
     inline for (trees) |*t| t.* = trie.Trie(u8){};
 
-    inline for (routes) |r, i| {
+    inline for (routes, 0..) |r, i| {
         trees[@enumToInt(r.method)].insert(r.path, i);
     }
 
@@ -48,11 +48,11 @@ pub fn Router(comptime Context: type, comptime routes: []const Route(Context)) R
                     switch (trees[9].get(request.path())) {
                         .none => return response.notFound(),
                         .static => |index| {
-                            inline for (routes) |route, i|
+                            inline for (routes, 0..) |route, i|
                                 if (index == i) return route.handler(context, response, request, &.{});
                         },
                         .with_params => |object| {
-                            inline for (routes) |route, i| {
+                            inline for (routes, 0..) |route, i| {
                                 if (object.data == i)
                                     return route.handler(context, response, request, object.params[0..object.param_count]);
                             }
@@ -60,12 +60,12 @@ pub fn Router(comptime Context: type, comptime routes: []const Route(Context)) R
                     }
                 },
                 .static => |index| {
-                    inline for (routes) |route, i| {
+                    inline for (routes, 0..) |route, i| {
                         if (index == i) return route.handler(context, response, request, &.{});
                     }
                 },
                 .with_params => |object| {
-                    inline for (routes) |route, i| {
+                    inline for (routes, 0..) |route, i| {
                         if (object.data == i)
                             return route.handler(context, response, request, object.params[0..object.param_count]);
                     }

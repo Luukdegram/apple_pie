@@ -348,7 +348,7 @@ const BufferUtil = struct {
 /// From a given buffer, attempts to parse the scheme
 fn parseSchema(uri: *Uri, buffer: []const u8) error{InvalidCharacter}!void {
     if (!std.ascii.isAlpha(buffer[0])) return error.InvalidCharacter;
-    for (buffer[1..]) |char, index| {
+    for (buffer[1..], 0..) |char, index| {
         switch (char) {
             'a'...'z', 'A'...'Z', '0'...'9', '+', '-', '.' => {},
             else => {
@@ -366,7 +366,7 @@ pub fn parseAuthority(uri: *Uri, buffer: []const u8) ParseError!usize {
     if (buffer.len == 0) return 0;
     // get the end of the authority component and also
     // parse each character to ensure it's a valid character.
-    const end = for (buffer) |char, index| {
+    const end = for (buffer, 0..) |char, index| {
         if (char == '/' or char == '#' or char == '?') break index;
     } else buffer.len;
     if (end == 0) return error.MissingHost;
@@ -378,7 +378,7 @@ pub fn parseAuthority(uri: *Uri, buffer: []const u8) ParseError!usize {
         const user_info = authority[0..user_index];
         // verify userinfo characters
         var colon_index: usize = 0;
-        for (user_info) |char, index| {
+        for (user_info, 0..) |char, index| {
             if (char == ':') {
                 uri.username = user_info[0..index];
                 colon_index = index;
@@ -407,7 +407,7 @@ pub fn parseAuthority(uri: *Uri, buffer: []const u8) ParseError!usize {
 /// This will also validate both host and port contain valid characters.
 fn parseHost(uri: *Uri, buffer: []const u8) !void {
     const host_end = if (std.mem.lastIndexOfScalar(u8, buffer, ':')) |colon_pos| blk: {
-        const end_port = for (buffer[colon_pos + 1 ..]) |char, index| {
+        const end_port = for (buffer[colon_pos + 1 ..], 0..) |char, index| {
             if (!std.ascii.isDigit(char)) break index;
         } else buffer.len - (colon_pos + 1);
         uri.port = std.fmt.parseInt(u16, buffer[colon_pos + 1 ..][0..end_port], 10) catch return error.InvalidPort;
@@ -432,7 +432,7 @@ fn parseIpv6(uri: *Uri, buffer: []const u8) !void {
     }
 
     if (std.mem.indexOfScalarPos(u8, buffer, end, ':')) |colon_pos| {
-        const end_port = for (buffer[colon_pos + 1 ..]) |char, index| {
+        const end_port = for (buffer[colon_pos + 1 ..], 0..) |char, index| {
             if (!std.ascii.isDigit(char)) break index;
         } else buffer.len - (colon_pos + 1);
         uri.port = std.fmt.parseInt(u16, buffer[colon_pos + 1 ..][0..end_port], 10) catch return error.InvalidPort;
@@ -452,7 +452,7 @@ fn parsePath(uri: *Uri, buffer: []const u8, is_no_scheme: bool) ParseError!void 
         if (buffer[1] == ':') return error.InvalidCharacter;
     }
 
-    for (buffer) |char, index| {
+    for (buffer, 0..) |char, index| {
         if (char == '?' or char == '#') {
             uri.path = buffer[0..index];
             return;
@@ -468,7 +468,7 @@ fn parsePath(uri: *Uri, buffer: []const u8, is_no_scheme: bool) ParseError!void 
 fn parseQuery(uri: *Uri, buffer: []const u8) ParseError!void {
     std.debug.assert(buffer.len > 0);
     std.debug.assert(buffer[0] == '?');
-    for (buffer[1..]) |char, index| {
+    for (buffer[1..], 0..) |char, index| {
         if (char == '#') {
             uri.query = buffer[0..index];
             return;
