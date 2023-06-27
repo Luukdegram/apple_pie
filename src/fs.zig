@@ -14,10 +14,10 @@ const fmtDate = @import("date.zig").fmtDate;
 
 pub const FileServer = @This();
 
-var dir: fs.Dir = undefined;
-var alloc: Allocator = undefined;
-var initialized: bool = false;
-var base_path: ?[]const u8 = null;
+dir: fs.Dir = undefined,
+alloc: Allocator = undefined,
+initialized: bool = false,
+base_path: ?[]const u8 = null,
 
 pub const Config = struct {
     dir_path: []const u8,
@@ -29,16 +29,16 @@ pub const Config = struct {
 /// function to the `Server`.
 ///
 /// deinit() must be called to close the dir handler
-pub fn init(allocator: Allocator, config: Config) fs.Dir.OpenError!void {
-    dir = try fs.cwd().openDir(config.dir_path, .{});
-    alloc = allocator;
-    initialized = true;
-    base_path = config.base_path;
+pub fn init(self: *FileServer, allocator: Allocator, config: Config) fs.Dir.OpenError!void {
+    self.dir = try fs.cwd().openDir(config.dir_path, .{});
+    self.alloc = allocator;
+    self.initialized = true;
+    self.base_path = config.base_path;
 }
 
 /// Closes the dir handler
-pub fn deinit() void {
-    dir.close();
+pub fn deinit(self: *FileServer) void {
+    self.dir.close();
 }
 
 pub const ServeError = error{
@@ -46,18 +46,17 @@ pub const ServeError = error{
 } || Response.Error || std.os.SendFileError || std.fs.File.OpenError;
 
 /// Serves a file based on the path of the request
-pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
-    _ = ctx;
-    std.debug.assert(initialized);
+pub fn serve(self: *FileServer, response: *Response, request: Request) ServeError!void {
+    std.debug.assert(self.initialized);
     const index = "index.html";
     var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     var path = Uri.resolvePath(request.path(), &buffer);
 
     if (std.mem.endsWith(u8, path, index)) {
-        return localRedirect(response, request, "./", alloc);
+        return localRedirect(response, request, "./", self.alloc);
     }
 
-    if (base_path) |b_path| {
+    if (self.base_path) |b_path| {
         if (std.mem.startsWith(u8, path[1..], b_path)) {
             path = path[b_path.len + 1 ..];
             if (path.len > 0 and path[0] == '/') path = path[1..];
@@ -72,7 +71,7 @@ pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
     var buf_new_path: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     const new_path = if (path.len == 0) index else blk: {
         // if the path is a directory, we should serve the index inside
-        const stat = dir.statFile(path) catch |err| switch (err) {
+        const stat = self.dir.statFile(path) catch |err| switch (err) {
             error.FileNotFound => return response.notFound(),
             else => |e| return e,
         };
@@ -82,7 +81,7 @@ pub fn serve(ctx: void, response: *Response, request: Request) ServeError!void {
         break :blk path;
     };
 
-    const file = dir.openFile(new_path, .{}) catch |err| switch (err) {
+    const file = self.dir.openFile(new_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return response.notFound(),
         else => |e| return e,
     };
